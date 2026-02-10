@@ -11,7 +11,10 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 BOLD='\033[1m'
 
-INSTALL_DIR="$HOME/penstation"
+# Get real user's home directory even when running with sudo
+REAL_USER="${SUDO_USER:-$USER}"
+REAL_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6)
+INSTALL_DIR="${REAL_HOME}/penstation"
 VENV_DIR="$INSTALL_DIR/venv"
 
 log()   { echo -e "${GREEN}[+]${NC} $1"; }

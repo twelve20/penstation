@@ -99,7 +99,13 @@ install_deps() {
         python3 python3-pip python3-venv \
         nginx git curl unzip wget \
         sqlite3 libsqlite3-dev \
-        net-tools wireless-tools iw
+        net-tools wireless-tools iw \
+        network-manager wireless-regdb \
+        aircrack-ng reaver bully \
+        hcxdumptool hcxtools \
+        hydra medusa smbclient nfs-common sshpass \
+        bluetooth bluez bluez-tools python3-bluez \
+        tcpdump tshark
 }
 
 # ── Install Nuclei ─────────────────────────────────────────

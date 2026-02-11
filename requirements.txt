@@ -7,3 +7,12 @@ pydantic-settings==2.7.1
 apscheduler==3.10.4
 python-nmap==0.7.1
 httpx==0.28.1
+
+# Phase 4: Bluetooth support
+pybluez==0.23
+bleak==0.22.0
+
+# Phase 5: Advanced features
+aiohttp==3.11.11
+numpy==2.2.3
+pymetasploit3==1.0.3

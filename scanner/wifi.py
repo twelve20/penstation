@@ -14,9 +14,60 @@ async def get_wifi_interface() -> str | None:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, _ = await proc.communicate()
+    stdout, stderr = await proc.communicate()
+
+    if proc.returncode != 0:
+        logger.error(f"Failed to detect WiFi interface: {stderr.decode()}")
+        return None
+
     match = re.search(r"Interface\s+(\S+)", stdout.decode())
-    return match.group(1) if match else None
+    if match:
+        logger.info(f"Detected WiFi interface: {match.group(1)}")
+        return match.group(1)
+    else:
+        logger.warning("No WiFi interface found")
+        return None
+
+
+async def set_regulatory_domain(country: str = "US") -> bool:
+    """Set WiFi regulatory domain to enable all channels."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "iw", "reg", "set", country,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await proc.communicate()
+
+        if proc.returncode == 0:
+            logger.info(f"Set regulatory domain to {country}")
+            return True
+        else:
+            logger.warning(f"Failed to set regulatory domain to {country}")
+            return False
+    except Exception as e:
+        logger.error(f"Error setting regulatory domain: {e}")
+        return False
+
+
+async def _scan_with_retry(scan_func, retries: int = 3):
+    """Retry a scan function with exponential backoff."""
+    for attempt in range(retries):
+        try:
+            result = await scan_func()
+            if result:
+                return result
+            logger.warning(f"Scan attempt {attempt + 1} returned empty results")
+        except Exception as e:
+            logger.warning(f"Scan attempt {attempt + 1} failed: {e}")
+
+        if attempt < retries - 1:
+            wait_time = 2 ** attempt
+            logger.info(f"Retrying in {wait_time} seconds...")
+            await asyncio.sleep(wait_time)
+
+    logger.error("All scan attempts failed")
+    return []
 
 
 async def get_wifi_status() -> dict:
@@ -37,12 +88,20 @@ async def scan_networks() -> list[dict]:
     """Scan for available WiFi networks. Returns sorted list by signal strength."""
     iface = await get_wifi_interface()
     if not iface:
+        logger.error("Cannot scan: no WiFi interface available")
         return []
 
-    if await _has_nmcli():
-        return await _nmcli_scan(iface)
+    logger.info(f"Scanning WiFi networks on {iface}")
 
-    return await _iw_scan(iface)
+    # Set regulatory domain for better scanning
+    await set_regulatory_domain()
+
+    if await _has_nmcli():
+        logger.info("Using NetworkManager for WiFi scan")
+        return await _scan_with_retry(lambda: _nmcli_scan(iface))
+
+    logger.info("Using iwlist for WiFi scan (NetworkManager not available)")
+    return await _scan_with_retry(lambda: _iw_scan(iface))
 
 
 async def connect_network(ssid: str, password: str) -> dict:
@@ -145,19 +204,26 @@ async def _nmcli_signal() -> int:
 
 async def _nmcli_scan(iface: str) -> list[dict]:
     # Force rescan
-    await asyncio.create_subprocess_exec(
+    logger.debug("Triggering NetworkManager WiFi rescan")
+    rescan_proc = await asyncio.create_subprocess_exec(
         "nmcli", "device", "wifi", "rescan",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
+    await rescan_proc.communicate()
     await asyncio.sleep(2)
 
+    logger.debug("Fetching WiFi scan results from NetworkManager")
     proc = await asyncio.create_subprocess_exec(
         "nmcli", "-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY,BSSID,FREQ", "device", "wifi", "list",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, _ = await proc.communicate()
+    stdout, stderr = await proc.communicate()
+
+    if proc.returncode != 0:
+        logger.error(f"nmcli scan failed: {stderr.decode()}")
+        return []
 
     networks = []
     seen_ssids = set()
@@ -295,20 +361,34 @@ async def _wpa_status(iface: str) -> dict:
 
 async def _iw_scan(iface: str) -> list[dict]:
     # Trigger scan
-    await asyncio.create_subprocess_exec(
+    logger.debug(f"Bringing up interface {iface}")
+    proc = await asyncio.create_subprocess_exec(
         "ip", "link", "set", iface, "up",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    await asyncio.sleep(1)
+    await proc.communicate()
 
+    # Increased delay for driver initialization (was 1s, now 3s)
+    await asyncio.sleep(3)
+
+    logger.debug(f"Running iwlist scan on {iface}")
     proc = await asyncio.create_subprocess_exec(
         "iwlist", iface, "scan",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, _ = await proc.communicate()
+    stdout, stderr = await proc.communicate()
+
+    if proc.returncode != 0:
+        logger.error(f"iwlist scan failed: {stderr.decode()}")
+        return []
+
     output = stdout.decode()
+
+    if not output or "No scan results" in output:
+        logger.warning(f"No WiFi networks found by iwlist on {iface}")
+        return []
 
     networks = []
     seen_ssids = set()

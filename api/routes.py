@@ -19,6 +19,12 @@ from scanner.wifi import (
     get_wifi_status,
     scan_networks,
 )
+from scanner.wifi_adapters import (
+    detect_all_adapters,
+    assign_adapter_roles,
+    enable_monitor_mode,
+    disable_monitor_mode,
+)
 
 logger = logging.getLogger("penstation.api")
 
@@ -271,7 +277,25 @@ async def wifi_status():
 
 @router.get("/wifi/scan")
 async def wifi_scan():
-    return await scan_networks()
+    networks = await scan_networks()
+
+    # Check if scan failed vs no networks found
+    if not networks:
+        from scanner.wifi import get_wifi_interface
+        iface = await get_wifi_interface()
+        if not iface:
+            return {
+                "error": "No WiFi interface found",
+                "networks": [],
+                "message": "Ensure WiFi adapter is connected and drivers are loaded"
+            }
+        return {
+            "error": None,
+            "networks": [],
+            "message": "No WiFi networks detected"
+        }
+
+    return {"error": None, "networks": networks, "message": f"Found {len(networks)} networks"}
 
 
 @router.post("/wifi/connect")
@@ -292,3 +316,50 @@ async def wifi_saved():
 @router.post("/wifi/forget")
 async def wifi_forget(req: WifiConnectRequest):
     return await forget_network(req.ssid)
+
+
+# ── WiFi Adapter Management ───────────────────────────────
+
+@router.get("/wifi/adapters")
+async def list_wifi_adapters():
+    """List all WiFi adapters with capabilities."""
+    adapters = await detect_all_adapters()
+    return [
+        {
+            "interface": a.interface,
+            "driver": a.driver,
+            "chipset": a.chipset,
+            "supports_monitor": a.supports_monitor,
+            "supports_injection": a.supports_injection,
+            "role": a.role,
+        }
+        for a in adapters
+    ]
+
+
+@router.get("/wifi/adapters/roles")
+async def get_adapter_roles():
+    """Get assigned adapter roles (primary/attack)."""
+    return await assign_adapter_roles()
+
+
+class MonitorModeRequest(BaseModel):
+    interface: str
+    enable: bool
+
+
+@router.post("/wifi/adapters/monitor")
+async def toggle_monitor_mode(req: MonitorModeRequest):
+    """Enable or disable monitor mode on an adapter."""
+    if req.enable:
+        success = await enable_monitor_mode(req.interface)
+        return {
+            "success": success,
+            "message": f"Monitor mode {'enabled' if success else 'failed'} on {req.interface}",
+        }
+    else:
+        success = await disable_monitor_mode(req.interface)
+        return {
+            "success": success,
+            "message": f"Monitor mode {'disabled' if success else 'failed'} on {req.interface}",
+        }

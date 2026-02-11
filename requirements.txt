@@ -8,12 +8,11 @@ apscheduler==3.10.4
 python-nmap==0.7.1
 httpx==0.28.1
 
-# Phase 4: Bluetooth support (commented out - incompatible with Python 3.13)
-# Will use bleak-only approach in Phase 4
-# pybluez==0.23
-bleak==0.22.0
+# Phase 4: Bluetooth support
+# Using bleak-only (modern BLE library, Python 3.13 compatible)
+bleak>=0.22.3
 
-# Phase 5: Advanced features
-aiohttp==3.11.11
-numpy==2.2.3
-# pymetasploit3==1.0.3  # Commented for now, will add in Phase 5
+# Phase 5: Advanced features (will be added when needed)
+# aiohttp==3.11.11
+# numpy==2.2.3
+# pymetasploit3==1.0.3

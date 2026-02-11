@@ -6,7 +6,22 @@ from typing import Optional
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import Alert, CVEEntry, Host, Port, ScanJob, Vulnerability
+from db.models import (
+    Alert,
+    BluetoothDevice,
+    BruteForceResult,
+    CVEEntry,
+    Host,
+    Plugin,
+    Port,
+    ScanJob,
+    StolenFile,
+    Vulnerability,
+    WiFiAttack,
+    WiFiClient,
+    WiFiHandshake,
+    WiFiNetwork,
+)
 
 
 # ── Hosts ──────────────────────────────────────────────────────────
@@ -265,3 +280,277 @@ async def get_heatmap(session: AsyncSession, days: int = 30) -> list[dict]:
         {"date": d, "severity": weight_to_sev.get(w, "info")}
         for d, w in sorted(day_map.items())
     ]
+
+
+# ── WiFi Networks ──────────────────────────────────────────────────
+
+async def upsert_wifi_network(session: AsyncSession, bssid: str, **kwargs) -> WiFiNetwork:
+    """Create or update WiFi network by BSSID."""
+    result = await session.execute(select(WiFiNetwork).where(WiFiNetwork.bssid == bssid))
+    network = result.scalar_one_or_none()
+    if network:
+        for k, v in kwargs.items():
+            if v is not None:
+                setattr(network, k, v)
+        network.last_seen = datetime.utcnow()
+    else:
+        network = WiFiNetwork(bssid=bssid, **kwargs)
+        session.add(network)
+    await session.commit()
+    return network
+
+
+async def get_all_wifi_networks(session: AsyncSession) -> list[WiFiNetwork]:
+    """Get all WiFi networks ordered by signal strength."""
+    result = await session.execute(
+        select(WiFiNetwork).order_by(WiFiNetwork.signal.desc())
+    )
+    return list(result.scalars().all())
+
+
+async def get_wifi_network(session: AsyncSession, bssid: str) -> Optional[WiFiNetwork]:
+    """Get WiFi network by BSSID."""
+    result = await session.execute(select(WiFiNetwork).where(WiFiNetwork.bssid == bssid))
+    return result.scalar_one_or_none()
+
+
+# ── WiFi Clients ───────────────────────────────────────────────────
+
+async def upsert_wifi_client(session: AsyncSession, mac: str, **kwargs) -> WiFiClient:
+    """Create or update WiFi client by MAC."""
+    result = await session.execute(select(WiFiClient).where(WiFiClient.mac == mac))
+    client = result.scalar_one_or_none()
+    if client:
+        for k, v in kwargs.items():
+            if v is not None:
+                setattr(client, k, v)
+        client.last_seen = datetime.utcnow()
+    else:
+        client = WiFiClient(mac=mac, **kwargs)
+        session.add(client)
+    await session.commit()
+    return client
+
+
+async def get_all_wifi_clients(session: AsyncSession) -> list[WiFiClient]:
+    """Get all WiFi clients ordered by last seen."""
+    result = await session.execute(
+        select(WiFiClient).order_by(WiFiClient.last_seen.desc())
+    )
+    return list(result.scalars().all())
+
+
+async def get_wifi_clients_for_network(session: AsyncSession, bssid: str) -> list[WiFiClient]:
+    """Get all clients connected to a specific network."""
+    result = await session.execute(
+        select(WiFiClient).where(WiFiClient.connected_to_bssid == bssid)
+    )
+    return list(result.scalars().all())
+
+
+# ── WiFi Handshakes ────────────────────────────────────────────────
+
+async def add_wifi_handshake(session: AsyncSession, **kwargs) -> WiFiHandshake:
+    """Add captured WiFi handshake."""
+    handshake = WiFiHandshake(**kwargs)
+    session.add(handshake)
+    await session.commit()
+    return handshake
+
+
+async def get_all_handshakes(session: AsyncSession) -> list[WiFiHandshake]:
+    """Get all captured handshakes."""
+    result = await session.execute(
+        select(WiFiHandshake).order_by(WiFiHandshake.captured_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+async def get_handshake(session: AsyncSession, handshake_id: int) -> Optional[WiFiHandshake]:
+    """Get handshake by ID."""
+    result = await session.execute(select(WiFiHandshake).where(WiFiHandshake.id == handshake_id))
+    return result.scalar_one_or_none()
+
+
+async def mark_handshake_cracked(session: AsyncSession, handshake_id: int, password: str):
+    """Mark handshake as cracked with password."""
+    await session.execute(
+        update(WiFiHandshake)
+        .where(WiFiHandshake.id == handshake_id)
+        .values(cracked=True, password=password)
+    )
+    await session.commit()
+
+
+async def count_handshakes(session: AsyncSession) -> int:
+    """Count total handshakes captured."""
+    result = await session.execute(select(func.count(WiFiHandshake.id)))
+    return result.scalar() or 0
+
+
+# ── WiFi Attacks ───────────────────────────────────────────────────
+
+async def log_attack(session: AsyncSession, **kwargs) -> WiFiAttack:
+    """Log a WiFi attack."""
+    attack = WiFiAttack(**kwargs)
+    session.add(attack)
+    await session.commit()
+    return attack
+
+
+async def update_attack_status(
+    session: AsyncSession, attack_id: int, status: str, **kwargs
+):
+    """Update WiFi attack status."""
+    result = await session.execute(select(WiFiAttack).where(WiFiAttack.id == attack_id))
+    attack = result.scalar_one_or_none()
+    if attack:
+        attack.status = status
+        attack.finished_at = datetime.utcnow()
+        for k, v in kwargs.items():
+            if hasattr(attack, k):
+                setattr(attack, k, v)
+        await session.commit()
+    return attack
+
+
+async def get_recent_attacks(session: AsyncSession, minutes: int = 5) -> list[WiFiAttack]:
+    """Get attacks from last N minutes."""
+    cutoff = datetime.utcnow() - timedelta(minutes=minutes)
+    result = await session.execute(
+        select(WiFiAttack).where(WiFiAttack.started_at >= cutoff)
+    )
+    return list(result.scalars().all())
+
+
+async def count_recent_attacks(session: AsyncSession, minutes: int = 5) -> int:
+    """Count attacks in last N minutes (for rate limiting)."""
+    cutoff = datetime.utcnow() - timedelta(minutes=minutes)
+    result = await session.execute(
+        select(func.count(WiFiAttack.id)).where(WiFiAttack.started_at >= cutoff)
+    )
+    return result.scalar() or 0
+
+
+# ── Brute Force Results ────────────────────────────────────────────
+
+async def store_credential(session: AsyncSession, **kwargs) -> BruteForceResult:
+    """Store brute force result (successful or failed)."""
+    result_obj = BruteForceResult(**kwargs)
+    session.add(result_obj)
+    await session.commit()
+    return result_obj
+
+
+async def get_credentials_for_host(
+    session: AsyncSession, host_ip: str
+) -> list[BruteForceResult]:
+    """Get all brute force results for a host."""
+    result = await session.execute(
+        select(BruteForceResult)
+        .where(BruteForceResult.host_ip == host_ip)
+        .order_by(BruteForceResult.found_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+async def get_successful_credentials(session: AsyncSession) -> list[BruteForceResult]:
+    """Get all successful credentials."""
+    result = await session.execute(
+        select(BruteForceResult)
+        .where(BruteForceResult.success == True)
+        .order_by(BruteForceResult.found_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+# ── Stolen Files ───────────────────────────────────────────────────
+
+async def log_stolen_file(session: AsyncSession, **kwargs) -> StolenFile:
+    """Log a stolen file."""
+    file_obj = StolenFile(**kwargs)
+    session.add(file_obj)
+    await session.commit()
+    return file_obj
+
+
+async def get_stolen_files_for_host(session: AsyncSession, host_ip: str) -> list[StolenFile]:
+    """Get all stolen files from a host."""
+    result = await session.execute(
+        select(StolenFile)
+        .where(StolenFile.host_ip == host_ip)
+        .order_by(StolenFile.stolen_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+async def get_all_stolen_files(session: AsyncSession) -> list[StolenFile]:
+    """Get all stolen files."""
+    result = await session.execute(
+        select(StolenFile).order_by(StolenFile.stolen_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+# ── Bluetooth Devices ──────────────────────────────────────────────
+
+async def store_bluetooth_device(session: AsyncSession, mac: str, **kwargs) -> BluetoothDevice:
+    """Store or update Bluetooth device."""
+    result = await session.execute(select(BluetoothDevice).where(BluetoothDevice.mac == mac))
+    device = result.scalar_one_or_none()
+    if device:
+        for k, v in kwargs.items():
+            if v is not None:
+                setattr(device, k, v)
+        device.last_seen = datetime.utcnow()
+    else:
+        device = BluetoothDevice(mac=mac, **kwargs)
+        session.add(device)
+    await session.commit()
+    return device
+
+
+async def get_all_bluetooth_devices(session: AsyncSession) -> list[BluetoothDevice]:
+    """Get all Bluetooth devices."""
+    result = await session.execute(
+        select(BluetoothDevice).order_by(BluetoothDevice.last_seen.desc())
+    )
+    return list(result.scalars().all())
+
+
+# ── Plugins ────────────────────────────────────────────────────────
+
+async def add_plugin(session: AsyncSession, **kwargs) -> Plugin:
+    """Add a plugin."""
+    plugin = Plugin(**kwargs)
+    session.add(plugin)
+    await session.commit()
+    return plugin
+
+
+async def get_all_plugins(session: AsyncSession) -> list[Plugin]:
+    """Get all plugins."""
+    result = await session.execute(select(Plugin).order_by(Plugin.name))
+    return list(result.scalars().all())
+
+
+async def get_plugin(session: AsyncSession, name: str) -> Optional[Plugin]:
+    """Get plugin by name."""
+    result = await session.execute(select(Plugin).where(Plugin.name == name))
+    return result.scalar_one_or_none()
+
+
+async def update_plugin_config(session: AsyncSession, name: str, config: str):
+    """Update plugin configuration."""
+    await session.execute(
+        update(Plugin).where(Plugin.name == name).values(config=config)
+    )
+    await session.commit()
+
+
+async def toggle_plugin(session: AsyncSession, name: str, enabled: bool):
+    """Enable or disable a plugin."""
+    await session.execute(
+        update(Plugin).where(Plugin.name == name).values(enabled=enabled)
+    )
+    await session.commit()

@@ -38,30 +38,57 @@ async def start_monitor(interface: str) -> str | None:
         )
         stdout, stderr = await proc.communicate()
         output = stdout.decode() + stderr.decode()
+        logger.info(f"airmon-ng output: {output}")
 
-        # Find the monitor interface name
-        for pattern in [
-            r"monitor mode.*enabled.*on.*\[?(\w+mon)\]?",
-            r"\((\w+mon)\)",
-            r"(\w+mon)",
-        ]:
-            match = re.search(pattern, output, re.IGNORECASE)
-            if match:
-                mon_iface = match.group(1)
-                logger.info(f"Monitor mode enabled: {mon_iface}")
-                return mon_iface
-
-        # Fallback: check if interface + "mon" exists
-        mon_iface = interface + "mon"
+        # Check which interfaces exist after airmon-ng
         check = await asyncio.create_subprocess_exec(
             "iw", "dev",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, _ = await check.communicate()
-        if mon_iface in stdout.decode():
-            logger.info(f"Monitor mode enabled: {mon_iface}")
+        iw_output = stdout.decode()
+
+        # Option 1: interface was renamed to wlan1mon
+        mon_iface = interface + "mon"
+        if mon_iface in iw_output:
+            logger.info(f"Monitor mode enabled (renamed): {mon_iface}")
             return mon_iface
+
+        # Option 2: interface kept same name (Kali default behavior)
+        # Check if it's now in monitor mode by checking type
+        if interface in iw_output:
+            type_check = await asyncio.create_subprocess_exec(
+                "iw", interface, "info",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            type_out, _ = await type_check.communicate()
+            if "monitor" in type_out.decode().lower():
+                logger.info(f"Monitor mode enabled (same name): {interface}")
+                return interface
+
+        # Option 3: parse airmon-ng output for the interface name
+        for pattern in [
+            r"monitor mode.*enabled.*on.*\[?(\w+)\]?",
+            r"\((\w+mon)\)",
+        ]:
+            match = re.search(pattern, output, re.IGNORECASE)
+            if match:
+                found_iface = match.group(1)
+                logger.info(f"Monitor mode enabled (parsed): {found_iface}")
+                return found_iface
+
+        # Option 4: try iwconfig as last resort
+        iwc = await asyncio.create_subprocess_exec(
+            "iwconfig", interface,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        iwc_out, _ = await iwc.communicate()
+        if "Mode:Monitor" in iwc_out.decode():
+            logger.info(f"Monitor mode enabled (iwconfig check): {interface}")
+            return interface
 
         logger.error(f"Failed to enable monitor mode: {output}")
         return None
@@ -79,6 +106,24 @@ async def stop_monitor(mon_interface: str) -> bool:
             stderr=asyncio.subprocess.PIPE,
         )
         await proc.communicate()
+
+        # If interface didn't have "mon" suffix, also set managed mode via iw
+        if not mon_interface.endswith("mon"):
+            await asyncio.create_subprocess_exec(
+                "ip", "link", "set", mon_interface, "down",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await asyncio.create_subprocess_exec(
+                "iw", mon_interface, "set", "type", "managed",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await asyncio.create_subprocess_exec(
+                "ip", "link", "set", mon_interface, "up",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
 
         # Restart NetworkManager
         await asyncio.create_subprocess_exec(

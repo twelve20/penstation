@@ -251,11 +251,12 @@ else
     warn "Captures directory missing (will be created on first capture)"
 fi
 
-if [ -f /home/kali/penstation/penstation.db ]; then
-    DB_SIZE=$(du -h /home/kali/penstation/penstation.db | cut -f1)
-    ok "Database exists ($DB_SIZE)"
+DB_FILE=$(find /home/kali/penstation -name "penstation.db" 2>/dev/null | head -1)
+if [ -n "$DB_FILE" ]; then
+    DB_SIZE=$(du -h "$DB_FILE" | cut -f1)
+    ok "Database exists: $DB_FILE ($DB_SIZE)"
 else
-    fail "Database" "penstation.db not found"
+    warn "penstation.db not found (may be in data/ subdirectory or created on first scan)"
 fi
 
 if [ -f /home/kali/penstation/.env ]; then

@@ -173,7 +173,14 @@ async def _test_injection(interface: str) -> bool:
             driver = driver_path.resolve().name
 
             # Drivers known to support injection
-            injection_drivers = ["ath9k", "ath9k_htc", "rt2800usb", "rt73usb", "rtl8187"]
+            injection_drivers = [
+                "ath9k", "ath9k_htc", "rt2800usb", "rt73usb", "rtl8187",
+                "brcmfmac",   # Broadcom with Nexmon patches (Kali)
+                "rtl8xxxu",   # Realtek RTL8188/8192
+                "rtl8188eus", # Realtek RTL8188EUS (aircrack-ng driver)
+                "88XXau",     # Realtek RTL8812AU
+                "8812au",     # Realtek RTL8812AU alt
+            ]
 
             if driver in injection_drivers:
                 logger.info(f"Driver {driver} is known to support injection")
@@ -197,15 +204,15 @@ def _assign_role(
     2. External adapters with injection support -> attack (pentesting)
     3. External adapters without injection -> primary
     """
-    # Built-in Raspberry Pi WiFi
-    if interface == "wlan0" and "brcm" in driver.lower():
-        return "primary"
-
-    # Atheros adapters are great for injection
-    if "ath" in driver.lower() and supports_injection:
+    # External USB adapters → prefer as attack adapter
+    if interface != "wlan0" and supports_monitor:
         return "attack"
 
-    # Realtek, Ralink with injection support
+    # Built-in Raspberry Pi WiFi → primary for connectivity
+    if interface == "wlan0":
+        return "primary"
+
+    # Any adapter with injection support → attack
     if supports_injection and supports_monitor:
         return "attack"
 

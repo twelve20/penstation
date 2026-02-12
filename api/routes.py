@@ -25,6 +25,19 @@ from scanner.wifi_adapters import (
     enable_monitor_mode,
     disable_monitor_mode,
 )
+from scanner.wifi_attack import (
+    start_monitor,
+    stop_monitor,
+    airodump_scan,
+    deauth_attack,
+    capture_handshake,
+    wps_attack,
+    crack_handshake,
+    stop_attack,
+    stop_all_attacks,
+    get_running_attacks,
+    get_captures,
+)
 
 logger = logging.getLogger("penstation.api")
 
@@ -348,6 +361,41 @@ class MonitorModeRequest(BaseModel):
     enable: bool
 
 
+class DeauthRequest(BaseModel):
+    interface: str
+    target_bssid: str
+    client_mac: str = "FF:FF:FF:FF:FF:FF"
+    count: int = 10
+
+
+class HandshakeRequest(BaseModel):
+    interface: str
+    target_bssid: str
+    channel: int
+    timeout: int = 60
+    deauth: bool = True
+
+
+class WPSRequest(BaseModel):
+    interface: str
+    target_bssid: str
+    channel: int
+    method: str = "reaver"
+    pixie_dust: bool = True
+    timeout: int = 120
+
+
+class CrackRequest(BaseModel):
+    pcap_path: str
+    wordlist: str = "/usr/share/wordlists/rockyou.txt"
+
+
+class AirodumpRequest(BaseModel):
+    interface: str
+    duration: int = 30
+    channel: int = 0
+
+
 @router.post("/wifi/adapters/monitor")
 async def toggle_monitor_mode(req: MonitorModeRequest):
     """Enable or disable monitor mode on an adapter."""
@@ -363,3 +411,80 @@ async def toggle_monitor_mode(req: MonitorModeRequest):
             "success": success,
             "message": f"Monitor mode {'disabled' if success else 'failed'} on {req.interface}",
         }
+
+
+# ── WiFi Pentesting ──────────────────────────────────────
+
+@router.post("/wifi/monitor/start")
+async def api_start_monitor(req: MonitorModeRequest):
+    """Start monitor mode, returns monitor interface name."""
+    mon_iface = await start_monitor(req.interface)
+    return {"success": bool(mon_iface), "monitor_interface": mon_iface}
+
+
+@router.post("/wifi/monitor/stop")
+async def api_stop_monitor(req: MonitorModeRequest):
+    """Stop monitor mode."""
+    ok = await stop_monitor(req.interface)
+    return {"success": ok}
+
+
+@router.post("/wifi/airodump")
+async def api_airodump(req: AirodumpRequest):
+    """Run airodump-ng scan for detailed WiFi recon."""
+    result = await airodump_scan(req.interface, req.duration, req.channel)
+    return result
+
+
+@router.post("/wifi/deauth")
+async def api_deauth(req: DeauthRequest):
+    """Send deauth packets to disconnect client from AP."""
+    result = await deauth_attack(
+        req.interface, req.target_bssid, req.client_mac, req.count
+    )
+    return result
+
+
+@router.post("/wifi/handshake")
+async def api_capture_handshake(req: HandshakeRequest):
+    """Capture WPA handshake from target AP."""
+    result = await capture_handshake(
+        req.interface, req.target_bssid, req.channel, req.timeout, req.deauth
+    )
+    return result
+
+
+@router.post("/wifi/wps")
+async def api_wps_attack(req: WPSRequest):
+    """Attack WPS-enabled AP using Reaver/Bully + Pixie-Dust."""
+    result = await wps_attack(
+        req.interface, req.target_bssid, req.channel,
+        req.method, req.pixie_dust, req.timeout,
+    )
+    return result
+
+
+@router.post("/wifi/crack")
+async def api_crack(req: CrackRequest):
+    """Crack captured handshake with wordlist."""
+    result = await crack_handshake(req.pcap_path, req.wordlist)
+    return result
+
+
+@router.get("/wifi/attacks")
+async def api_running_attacks():
+    """List running attacks."""
+    return {"attacks": get_running_attacks()}
+
+
+@router.post("/wifi/attacks/stop")
+async def api_stop_all():
+    """Stop all running attacks."""
+    count = await stop_all_attacks()
+    return {"stopped": count}
+
+
+@router.get("/wifi/captures")
+async def api_captures():
+    """List captured handshake files."""
+    return get_captures()

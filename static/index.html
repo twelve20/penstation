@@ -87,6 +87,80 @@ td{padding:4px 8px;border-bottom:1px solid #222}
     <div id="vulns-output" class="output">Click to load</div>
   </div>
 
+  <!-- WiFi Pentesting -->
+  <div class="section" style="grid-column:1/3">
+    <h2>WiFi Pentesting</h2>
+
+    <!-- Monitor Mode -->
+    <div style="margin-bottom:.8rem">
+      <b style="color:#ff0">Monitor Mode:</b>
+      Interface: <input type="text" id="mon-iface" value="wlan1" style="width:80px">
+      <button onclick="monStart()">Start Monitor</button>
+      <button class="red" onclick="monStop()">Stop Monitor</button>
+      <span id="mon-status" style="margin-left:8px"></span>
+    </div>
+
+    <!-- Airodump Scan -->
+    <div style="margin-bottom:.8rem">
+      <b style="color:#ff0">Airodump Scan:</b>
+      Monitor IF: <input type="text" id="airo-iface" value="wlan1mon" style="width:100px">
+      Duration: <input type="number" id="airo-dur" value="20" style="width:50px">s
+      Channel: <input type="number" id="airo-ch" value="0" style="width:50px">
+      <button onclick="airodumpScan()">Scan</button>
+    </div>
+    <div id="airo-output" class="output" style="max-height:250px">Run airodump scan to see APs and clients</div>
+
+    <!-- Deauth -->
+    <div style="margin-top:.8rem;margin-bottom:.8rem">
+      <b style="color:#f33">Deauth Attack:</b>
+      Mon IF: <input type="text" id="deauth-iface" value="wlan1mon" style="width:100px">
+      BSSID: <input type="text" id="deauth-bssid" placeholder="AA:BB:CC:DD:EE:FF" style="width:150px">
+      Client: <input type="text" id="deauth-client" value="FF:FF:FF:FF:FF:FF" style="width:150px">
+      Count: <input type="number" id="deauth-count" value="10" style="width:50px">
+      <button class="red" onclick="doDeauth()">DEAUTH</button>
+    </div>
+
+    <!-- Handshake Capture -->
+    <div style="margin-bottom:.8rem">
+      <b style="color:#ff0">Handshake Capture:</b>
+      Mon IF: <input type="text" id="hs-iface" value="wlan1mon" style="width:100px">
+      BSSID: <input type="text" id="hs-bssid" placeholder="AA:BB:CC:DD:EE:FF" style="width:150px">
+      Channel: <input type="number" id="hs-ch" value="1" style="width:50px">
+      Timeout: <input type="number" id="hs-timeout" value="60" style="width:50px">s
+      <button class="yellow" onclick="captureHS()">Capture</button>
+    </div>
+
+    <!-- WPS Attack -->
+    <div style="margin-bottom:.8rem">
+      <b style="color:#ff0">WPS Attack:</b>
+      Mon IF: <input type="text" id="wps-iface" value="wlan1mon" style="width:100px">
+      BSSID: <input type="text" id="wps-bssid" placeholder="AA:BB:CC:DD:EE:FF" style="width:150px">
+      Channel: <input type="number" id="wps-ch" value="1" style="width:50px">
+      <select id="wps-method" style="background:#000;color:#eee;border:1px solid #333;padding:4px;font-family:monospace">
+        <option value="reaver">Reaver</option>
+        <option value="bully">Bully</option>
+      </select>
+      <label style="color:#888"><input type="checkbox" id="wps-pixie" checked> Pixie-Dust</label>
+      <button class="yellow" onclick="doWPS()">Attack WPS</button>
+    </div>
+
+    <!-- Crack -->
+    <div style="margin-bottom:.8rem">
+      <b style="color:#ff0">Crack Handshake:</b>
+      PCAP: <input type="text" id="crack-pcap" placeholder="/home/kali/penstation/captures/hs_*.cap" style="width:300px">
+      Wordlist: <input type="text" id="crack-wl" value="/usr/share/wordlists/rockyou.txt" style="width:250px">
+      <button class="yellow" onclick="doCrack()">Crack</button>
+    </div>
+
+    <!-- Controls -->
+    <div style="margin-bottom:.5rem">
+      <button onclick="loadAttacks()">Running Attacks</button>
+      <button class="red" onclick="stopAll()">Stop All Attacks</button>
+      <button onclick="loadCaptures()">List Captures</button>
+    </div>
+    <div id="attack-output" class="output">Attack results will appear here</div>
+  </div>
+
   <!-- Scans History -->
   <div class="section">
     <h2>Scan History</h2>
@@ -265,6 +339,155 @@ async function rawApi() {
   const url = $('api-url').value;
   const data = await api(url);
   $('raw-output').textContent = json(data);
+}
+
+// ── WiFi Pentesting ──────────────────────────
+async function monStart() {
+  const iface = $('mon-iface').value;
+  $('mon-status').textContent = 'Starting...';
+  $('mon-status').style.color = '#ff0';
+  const data = await api('/api/wifi/monitor/start', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({interface: iface, enable: true})
+  });
+  if (data.success) {
+    $('mon-status').textContent = 'ON: ' + (data.monitor_interface||'');
+    $('mon-status').style.color = '#0f0';
+    $('airo-iface').value = data.monitor_interface || iface+'mon';
+    $('deauth-iface').value = data.monitor_interface || iface+'mon';
+    $('hs-iface').value = data.monitor_interface || iface+'mon';
+    $('wps-iface').value = data.monitor_interface || iface+'mon';
+  } else {
+    $('mon-status').textContent = 'FAILED';
+    $('mon-status').style.color = '#f33';
+  }
+}
+
+async function monStop() {
+  const iface = $('airo-iface').value || $('mon-iface').value + 'mon';
+  $('mon-status').textContent = 'Stopping...';
+  const data = await api('/api/wifi/monitor/stop', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({interface: iface, enable: false})
+  });
+  $('mon-status').textContent = data.success ? 'OFF' : 'FAILED';
+  $('mon-status').style.color = data.success ? '#888' : '#f33';
+}
+
+async function airodumpScan() {
+  const iface = $('airo-iface').value;
+  const dur = parseInt($('airo-dur').value) || 20;
+  const ch = parseInt($('airo-ch').value) || 0;
+  $('airo-output').textContent = `Scanning for ${dur}s on ${iface}...`;
+  const data = await api('/api/wifi/airodump', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({interface: iface, duration: dur, channel: ch})
+  });
+  const nets = data.networks || [];
+  const clients = data.clients || [];
+  if (!nets.length && !clients.length) {
+    $('airo-output').textContent = 'No results (check monitor mode)';
+    return;
+  }
+  let html = '<b style="color:#0ff">APs (' + nets.length + '):</b>\n';
+  html += '<table><tr><th>BSSID</th><th>CH</th><th>ENC</th><th>PWR</th><th>Data</th><th>SSID</th><th></th></tr>';
+  nets.forEach(n => {
+    html += `<tr>
+      <td>${n.bssid}</td><td>${n.channel}</td><td>${n.encryption}</td>
+      <td>${n.power}</td><td>${n.data_packets}</td><td>${n.ssid||'(hidden)'}</td>
+      <td><button onclick="targetAP('${n.bssid}',${n.channel},'${esc(n.ssid)}')" style="padding:2px 6px;font-size:11px">TARGET</button></td>
+    </tr>`;
+  });
+  html += '</table>';
+  if (clients.length) {
+    html += '\n<b style="color:#0ff">Clients (' + clients.length + '):</b>\n';
+    html += '<table><tr><th>MAC</th><th>PWR</th><th>Packets</th><th>AP BSSID</th><th>Probes</th></tr>';
+    clients.forEach(c => {
+      html += `<tr><td>${c.mac}</td><td>${c.power}</td><td>${c.packets}</td><td>${c.bssid}</td><td>${c.probes||''}</td></tr>`;
+    });
+    html += '</table>';
+  }
+  $('airo-output').innerHTML = html;
+}
+
+function targetAP(bssid, channel, ssid) {
+  $('deauth-bssid').value = bssid;
+  $('hs-bssid').value = bssid;
+  $('hs-ch').value = channel;
+  $('wps-bssid').value = bssid;
+  $('wps-ch').value = channel;
+  $('attack-output').textContent = `Target set: ${ssid} (${bssid}) CH ${channel}`;
+}
+
+async function doDeauth() {
+  const data = await api('/api/wifi/deauth', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({
+      interface: $('deauth-iface').value,
+      target_bssid: $('deauth-bssid').value,
+      client_mac: $('deauth-client').value,
+      count: parseInt($('deauth-count').value) || 10,
+    })
+  });
+  $('attack-output').textContent = json(data);
+}
+
+async function captureHS() {
+  $('attack-output').textContent = 'Capturing handshake... (this may take up to ' + $('hs-timeout').value + 's)';
+  const data = await api('/api/wifi/handshake', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({
+      interface: $('hs-iface').value,
+      target_bssid: $('hs-bssid').value,
+      channel: parseInt($('hs-ch').value),
+      timeout: parseInt($('hs-timeout').value) || 60,
+      deauth: true,
+    })
+  });
+  $('attack-output').textContent = json(data);
+  if (data.pcap_path) $('crack-pcap').value = data.pcap_path;
+}
+
+async function doWPS() {
+  $('attack-output').textContent = 'Running WPS attack...';
+  const data = await api('/api/wifi/wps', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({
+      interface: $('wps-iface').value,
+      target_bssid: $('wps-bssid').value,
+      channel: parseInt($('wps-ch').value),
+      method: $('wps-method').value,
+      pixie_dust: $('wps-pixie').checked,
+    })
+  });
+  $('attack-output').textContent = json(data);
+}
+
+async function doCrack() {
+  $('attack-output').textContent = 'Cracking handshake with wordlist...';
+  const data = await api('/api/wifi/crack', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({
+      pcap_path: $('crack-pcap').value,
+      wordlist: $('crack-wl').value,
+    })
+  });
+  $('attack-output').textContent = json(data);
+}
+
+async function loadAttacks() {
+  const data = await api('/api/wifi/attacks');
+  $('attack-output').textContent = json(data);
+}
+
+async function stopAll() {
+  const data = await api('/api/wifi/attacks/stop', {method:'POST'});
+  $('attack-output').textContent = json(data);
+}
+
+async function loadCaptures() {
+  const data = await api('/api/wifi/captures');
+  $('attack-output').textContent = json(data);
 }
 
 // Clock

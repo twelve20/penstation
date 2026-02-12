@@ -4,1130 +4,279 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PENSTATION</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Press+Start+2P&display=swap" rel="stylesheet">
 <style>
-/* ── RESET & BASE ─────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
-:root{
-  --bg:#080c10;--bg2:#0c1117;--bg3:#111820;
-  --green:#39ff6a;--green-dim:#1a7a33;--green-glow:rgba(57,255,106,.15);
-  --cyan:#00e5ff;--cyan-dim:#006b7a;
-  --red:#ff2244;--red-dim:#7a1122;
-  --yellow:#ffcc00;--orange:#ff8800;
-  --text:#c0ccda;--text-dim:#556677;
-  --border:#1a2233;
-  --font-mono:'Share Tech Mono',monospace;
-  --font-pixel:'Press Start 2P',cursive;
-}
-html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--font-mono);overflow-x:hidden;cursor:crosshair}
-/* Custom crosshair cursor */
-body{cursor:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'%3E%3Cline x1='8' y1='0' x2='8' y2='6' stroke='%2339ff6a' stroke-width='2'/%3E%3Cline x1='8' y1='10' x2='8' y2='16' stroke='%2339ff6a' stroke-width='2'/%3E%3Cline x1='0' y1='8' x2='6' y2='8' stroke='%2339ff6a' stroke-width='2'/%3E%3Cline x1='10' y1='8' x2='16' y2='8' stroke='%2339ff6a' stroke-width='2'/%3E%3C/svg%3E") 8 8, crosshair}
-a{color:var(--cyan);text-decoration:none}
-::-webkit-scrollbar{width:6px}
-::-webkit-scrollbar-track{background:var(--bg2)}
-::-webkit-scrollbar-thumb{background:var(--green-dim);border-radius:3px}
-
-/* ── CRT EFFECTS ──────────────────────────────────────── */
-.crt-scanlines{position:fixed;top:0;left:0;width:100%;height:100%;
-  background:repeating-linear-gradient(0deg,transparent,transparent 1px,rgba(0,0,0,.03) 1px,rgba(0,0,0,.03) 2px);
-  pointer-events:none;z-index:9999}
-.crt-vignette{position:fixed;top:0;left:0;width:100%;height:100%;
-  background:radial-gradient(ellipse at center,transparent 60%,rgba(0,0,0,.6) 100%);
-  pointer-events:none;z-index:9998}
-.crt-flicker{animation:flicker 0.15s infinite alternate}
-@keyframes flicker{0%{opacity:0.98}100%{opacity:1}}
-
-/* ── GLITCH ANIMATION ─────────────────────────────────── */
-.glitch{position:relative;font-family:var(--font-pixel);font-size:1.4rem;color:var(--green);letter-spacing:4px}
-.glitch::before,.glitch::after{content:attr(data-text);position:absolute;top:0;left:0;width:100%;height:100%}
-.glitch::before{animation:glitch1 2s infinite linear alternate-reverse;clip-path:polygon(0 0,100% 0,100% 40%,0 40%);color:var(--cyan)}
-.glitch::after{animation:glitch2 3s infinite linear alternate-reverse;clip-path:polygon(0 60%,100% 60%,100% 100%,0 100%);color:var(--red)}
-@keyframes glitch1{0%{transform:translate(0)}20%{transform:translate(-3px,1px)}40%{transform:translate(3px,-1px)}60%{transform:translate(-1px,2px)}80%{transform:translate(2px,-2px)}100%{transform:translate(0)}}
-@keyframes glitch2{0%{transform:translate(0)}25%{transform:translate(2px,-1px)}50%{transform:translate(-2px,2px)}75%{transform:translate(1px,-2px)}100%{transform:translate(0)}}
-
-/* ── BOOT SEQUENCE ────────────────────────────────────── */
-#boot-screen{position:fixed;top:0;left:0;width:100%;height:100%;background:var(--bg);z-index:10000;display:flex;align-items:center;justify-content:center;flex-direction:column;padding:2rem;transition:opacity .5s}
-#boot-screen.hidden{opacity:0;pointer-events:none}
-#boot-text{font-family:var(--font-mono);color:var(--green);font-size:.85rem;white-space:pre-wrap;max-width:600px;line-height:1.6}
-
-/* ── LAYOUT ───────────────────────────────────────────── */
-#app{display:none;flex-direction:column;min-height:100vh;padding:0}
-#app.visible{display:flex}
-header{display:flex;align-items:center;justify-content:space-between;padding:.8rem 1.2rem;border-bottom:1px solid var(--border);background:var(--bg2)}
-.header-left{display:flex;align-items:center;gap:1rem}
-.header-right{display:flex;align-items:center;gap:1.2rem;font-size:.8rem;color:var(--text-dim)}
-.live-dot{width:8px;height:8px;border-radius:50%;background:var(--green);animation:pulse-dot 1.5s infinite}
-@keyframes pulse-dot{0%,100%{box-shadow:0 0 4px var(--green)}50%{box-shadow:0 0 12px var(--green),0 0 20px var(--green)}}
-.status-badge{padding:2px 8px;border:1px solid var(--green);color:var(--green);font-size:.7rem;border-radius:2px}
-
-/* ── MAIN GRID ────────────────────────────────────────── */
-.main-grid{display:grid;grid-template-columns:280px 1fr;grid-template-rows:auto 1fr auto;gap:0;flex:1;overflow:hidden}
-
-/* ── STAT CARDS ───────────────────────────────────────── */
-.stats-panel{grid-column:1;grid-row:1;padding:.8rem;display:flex;flex-direction:column;gap:.5rem;border-right:1px solid var(--border);border-bottom:1px solid var(--border)}
-.stat-card{background:var(--bg2);border:1px solid var(--border);padding:.6rem .8rem;cursor:pointer;transition:all .15s;position:relative;overflow:hidden}
-.stat-card:hover{border-color:var(--green);box-shadow:0 0 10px var(--green-glow)}
-.stat-card:hover::before{content:'SELECT_';position:absolute;left:4px;top:4px;font-size:.5rem;color:var(--green);opacity:.6}
-.stat-card .label{font-size:.6rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:2px}
-.stat-card .value{font-size:1.5rem;font-weight:bold;margin-top:2px}
-.stat-card.critical .value{color:var(--red)}
-.stat-card.high .value{color:var(--orange)}
-.stat-card.medium .value{color:var(--yellow)}
-.stat-card.hosts .value{color:var(--cyan)}
-.stat-card.scan .value{color:var(--green);font-size:.75rem}
-
-/* ── NETWORK MAP ──────────────────────────────────────── */
-.map-panel{grid-column:2;grid-row:1/3;border-bottom:1px solid var(--border);position:relative;min-height:300px}
-.map-panel canvas{width:100%;height:100%}
-.map-label{position:absolute;top:8px;left:12px;font-size:.6rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:2px}
-
-/* ── HOSTS TABLE ──────────────────────────────────────── */
-.hosts-panel{grid-column:1/3;grid-row:3;border-bottom:1px solid var(--border);overflow:auto;max-height:280px}
-.hosts-table{width:100%;border-collapse:collapse;font-size:.78rem}
-.hosts-table th{position:sticky;top:0;background:var(--bg2);border-bottom:1px solid var(--border);padding:.5rem .7rem;text-align:left;font-size:.6rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px}
-.hosts-table td{padding:.45rem .7rem;border-bottom:1px solid var(--border);vertical-align:middle}
-.hosts-table tr{cursor:pointer;transition:background .1s}
-.hosts-table tr:hover{background:var(--green-glow)}
-.host-avatar{width:32px;height:32px;image-rendering:pixelated;vertical-align:middle}
-.risk-bar{width:60px;height:8px;background:var(--bg);border:1px solid var(--border);display:inline-block;vertical-align:middle;position:relative}
-.risk-bar-fill{height:100%;transition:width .3s}
-.sev-badge{display:inline-block;padding:1px 6px;font-size:.6rem;border-radius:2px;color:#000;font-weight:bold}
-.sev-badge.critical{background:var(--red);color:#fff}
-.sev-badge.high{background:var(--orange)}
-.sev-badge.medium{background:var(--yellow)}
-.sev-badge.low{background:var(--cyan)}
-.sev-badge.info{background:var(--text-dim);color:#fff}
-.sev-badge.none{background:var(--green-dim);color:var(--green)}
-
-/* ── BOTTOM PANELS ────────────────────────────────────── */
-.bottom-grid{display:grid;grid-template-columns:1fr 320px;gap:0;height:220px}
-.log-panel{border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
-.log-panel .panel-header,.threat-panel .panel-header,.alerts-panel .panel-header,.heatmap-panel .panel-header{
-  padding:.4rem .8rem;background:var(--bg2);border-bottom:1px solid var(--border);
-  font-size:.6rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:2px}
-.log-content{flex:1;overflow-y:auto;padding:.4rem .8rem;font-size:.72rem;line-height:1.5}
-.log-line{opacity:0;animation:fadeIn .3s forwards}
-.log-line.INFO{color:var(--cyan)}
-.log-line.WARN{color:var(--yellow)}
-.log-line.CRITICAL{color:var(--red);font-weight:bold}
-.log-line.OK{color:var(--green)}
-@keyframes fadeIn{to{opacity:1}}
-
-/* ── THREAT MATRIX ────────────────────────────────────── */
-.threat-panel{display:flex;flex-direction:column;overflow:hidden}
-.threat-bars{flex:1;padding:.6rem;display:flex;flex-direction:column;justify-content:center;gap:.5rem}
-.threat-row{display:flex;align-items:center;gap:.5rem;font-size:.7rem}
-.threat-row .lbl{width:60px;text-align:right;color:var(--text-dim);font-size:.6rem;text-transform:uppercase}
-.threat-row .bar{flex:1;height:14px;background:var(--bg);border:1px solid var(--border);position:relative}
-.threat-row .bar-fill{height:100%;transition:width .5s}
-.threat-row .cnt{width:30px;font-size:.7rem}
-.threat-row.critical .bar-fill{background:var(--red)}
-.threat-row.critical .cnt{color:var(--red)}
-.threat-row.high .bar-fill{background:var(--orange)}
-.threat-row.high .cnt{color:var(--orange)}
-.threat-row.medium .bar-fill{background:var(--yellow)}
-.threat-row.medium .cnt{color:var(--yellow)}
-.threat-row.low .bar-fill{background:var(--cyan)}
-.threat-row.low .cnt{color:var(--cyan)}
-
-/* ── HEATMAP ──────────────────────────────────────────── */
-.heatmap-section{border-top:1px solid var(--border);padding:.5rem .8rem;display:flex;align-items:center;gap:.3rem;flex-wrap:wrap}
-.heatmap-section .title{font-size:.6rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:2px;width:100%;margin-bottom:.3rem}
-.heat-cell{width:12px;height:12px;border-radius:1px;cursor:pointer;transition:transform .1s}
-.heat-cell:hover{transform:scale(1.5)}
-.heat-cell.none{background:var(--bg3)}
-.heat-cell.info{background:#1a3344}
-.heat-cell.low{background:var(--cyan-dim)}
-.heat-cell.medium{background:#7a6600}
-.heat-cell.high{background:#7a4400}
-.heat-cell.critical{background:var(--red-dim)}
-
-/* ── TICKER ───────────────────────────────────────────── */
-.ticker{border-top:1px solid var(--border);background:var(--bg2);padding:.3rem 0;overflow:hidden;white-space:nowrap}
-.ticker-inner{display:inline-block;animation:scroll-left 30s linear infinite;font-size:.7rem;color:var(--green-dim);padding-left:100%}
-@keyframes scroll-left{0%{transform:translateX(0)}100%{transform:translateX(-100%)}}
-.ticker-item{margin-right:3rem}
-.ticker-item.critical{color:var(--red)}
-
-/* ── MODAL ────────────────────────────────────────────── */
-.modal-overlay{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.7);z-index:5000;display:none;align-items:center;justify-content:center}
-.modal-overlay.open{display:flex}
-.modal{background:var(--bg2);border:1px solid var(--green-dim);max-width:700px;width:90%;max-height:80vh;overflow-y:auto;padding:0;box-shadow:0 0 40px rgba(57,255,106,.1)}
-.modal-header{display:flex;justify-content:space-between;align-items:center;padding:.8rem 1rem;border-bottom:1px solid var(--border);background:var(--bg)}
-.modal-header h2{font-family:var(--font-pixel);font-size:.7rem;color:var(--green)}
-.modal-close{background:none;border:1px solid var(--red-dim);color:var(--red);padding:2px 8px;cursor:pointer;font-family:var(--font-mono);font-size:.8rem}
-.modal-close:hover{background:var(--red);color:#fff}
-.modal-tabs{display:flex;border-bottom:1px solid var(--border)}
-.modal-tab{padding:.5rem 1rem;cursor:pointer;font-size:.7rem;color:var(--text-dim);border-bottom:2px solid transparent;transition:all .15s}
-.modal-tab:hover,.modal-tab.active{color:var(--green);border-bottom-color:var(--green)}
-.modal-body{padding:1rem}
-.modal-body table{width:100%;font-size:.75rem;border-collapse:collapse}
-.modal-body td,.modal-body th{padding:.3rem .5rem;border-bottom:1px solid var(--border);text-align:left}
-.modal-body th{color:var(--text-dim);font-size:.6rem;text-transform:uppercase}
-.vuln-item{border:1px solid var(--border);margin-bottom:.5rem;cursor:pointer}
-.vuln-item-header{padding:.5rem .7rem;display:flex;justify-content:space-between;align-items:center;font-size:.75rem}
-.vuln-item-body{padding:.5rem .7rem;border-top:1px solid var(--border);font-size:.72rem;color:var(--text-dim);display:none;line-height:1.5}
-.vuln-item-body.open{display:block}
-.port-icon{font-size:.9rem;margin-right:.3rem}
-
-/* ── ALERTS PANEL ─────────────────────────────────────── */
-.alerts-tab{display:none}
-.alerts-tab.visible{display:block}
-.alerts-panel{max-height:200px;overflow-y:auto}
-.alert-item{padding:.4rem .7rem;border-bottom:1px solid var(--border);font-size:.72rem;display:flex;gap:.5rem;align-items:flex-start}
-.alert-item .time{color:var(--text-dim);white-space:nowrap;font-size:.65rem}
-
-/* ── CRITICAL FLASH ───────────────────────────────────── */
-.critical-flash{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(255,34,68,.15);z-index:9990;pointer-events:none;opacity:0;animation:crit-flash .4s}
-@keyframes crit-flash{0%{opacity:1}100%{opacity:0}}
-
-/* ── MATRIX RAIN BACKGROUND ───────────────────────────── */
-#matrix-canvas{position:fixed;top:0;left:0;width:100%;height:100%;z-index:-1;opacity:.03;pointer-events:none}
-
-/* ── WIFI PANEL ───────────────────────────────────────── */
-.wifi-btn{background:none;border:1px solid var(--border);color:var(--cyan);padding:3px 10px;cursor:pointer;font-family:var(--font-mono);font-size:.75rem;display:flex;align-items:center;gap:6px;transition:all .15s;border-radius:2px}
-.wifi-btn:hover{border-color:var(--cyan);box-shadow:0 0 8px rgba(0,229,255,.2)}
-.wifi-btn .wifi-icon{font-size:1rem}
-.wifi-btn .wifi-ssid{max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.wifi-btn.disconnected{color:var(--red-dim);border-color:var(--red-dim)}
-.wifi-btn.disconnected:hover{border-color:var(--red);color:var(--red)}
-
-.wifi-modal-overlay{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.7);z-index:6000;display:none;align-items:center;justify-content:center}
-.wifi-modal-overlay.open{display:flex}
-.wifi-modal{background:var(--bg2);border:1px solid var(--cyan-dim);width:420px;max-width:95vw;max-height:80vh;overflow-y:auto;box-shadow:0 0 40px rgba(0,229,255,.1)}
-.wifi-modal .modal-header{border-bottom-color:var(--cyan-dim)}
-.wifi-modal .modal-header h2{color:var(--cyan)}
-
-.wifi-status-bar{padding:.6rem 1rem;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;font-size:.75rem}
-.wifi-status-bar .connected-info{display:flex;align-items:center;gap:.5rem}
-.wifi-status-bar .signal-bars{display:flex;gap:2px;align-items:flex-end;height:14px}
-.wifi-status-bar .signal-bars .bar{width:3px;background:var(--border);border-radius:1px}
-.wifi-status-bar .signal-bars .bar.active{background:var(--green)}
-.wifi-disconnect-btn{background:none;border:1px solid var(--red-dim);color:var(--red);padding:2px 8px;cursor:pointer;font-family:var(--font-mono);font-size:.7rem;transition:all .15s}
-.wifi-disconnect-btn:hover{background:var(--red);color:#fff}
-
-.wifi-scan-btn{display:block;width:calc(100% - 2rem);margin:0.5rem 1rem;padding:.4rem;background:none;border:1px solid var(--cyan-dim);color:var(--cyan);cursor:pointer;font-family:var(--font-mono);font-size:.7rem;text-transform:uppercase;letter-spacing:2px;transition:all .15s}
-.wifi-scan-btn:hover{background:rgba(0,229,255,.1);border-color:var(--cyan)}
-.wifi-scan-btn:disabled{opacity:.4;cursor:wait}
-.wifi-scan-btn.scanning{animation:pulse-border 1s infinite}
-@keyframes pulse-border{0%,100%{border-color:var(--cyan-dim)}50%{border-color:var(--cyan)}}
-
-.wifi-networks{padding:0;max-height:300px;overflow-y:auto}
-.wifi-network{display:flex;align-items:center;justify-content:space-between;padding:.55rem 1rem;border-bottom:1px solid var(--border);cursor:pointer;transition:background .1s;font-size:.75rem}
-.wifi-network:hover{background:rgba(0,229,255,.07)}
-.wifi-network.active{background:rgba(57,255,106,.07);border-left:3px solid var(--green)}
-.wifi-network .net-left{display:flex;align-items:center;gap:.6rem;flex:1;min-width:0}
-.wifi-network .net-ssid{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.wifi-network .net-security{font-size:.6rem;color:var(--text-dim);padding:1px 4px;border:1px solid var(--border);border-radius:2px}
-.wifi-network .net-signal{display:flex;gap:2px;align-items:flex-end;height:12px;margin-left:auto;flex-shrink:0}
-.wifi-network .net-signal .bar{width:3px;border-radius:1px}
-
-.wifi-password-form{padding:.8rem 1rem;border-top:1px solid var(--cyan-dim);background:var(--bg);display:none}
-.wifi-password-form.open{display:block}
-.wifi-password-form .form-title{font-size:.65rem;color:var(--cyan);text-transform:uppercase;letter-spacing:2px;margin-bottom:.5rem}
-.wifi-password-form input{width:100%;padding:.4rem .6rem;background:var(--bg2);border:1px solid var(--border);color:var(--text);font-family:var(--font-mono);font-size:.8rem;margin-bottom:.5rem;outline:none}
-.wifi-password-form input:focus{border-color:var(--cyan)}
-.wifi-password-form .form-actions{display:flex;gap:.5rem;justify-content:flex-end}
-.wifi-password-form button{padding:.3rem .8rem;font-family:var(--font-mono);font-size:.7rem;cursor:pointer;border-radius:2px;border:1px solid}
-.wifi-connect-btn{background:none;border-color:var(--green) !important;color:var(--green)}
-.wifi-connect-btn:hover{background:var(--green);color:#000}
-.wifi-connect-btn:disabled{opacity:.4;cursor:wait}
-.wifi-cancel-btn{background:none;border-color:var(--border) !important;color:var(--text-dim)}
-.wifi-cancel-btn:hover{border-color:var(--text) !important;color:var(--text)}
-
-.wifi-saved-section{border-top:1px solid var(--border);padding:.4rem 1rem}
-.wifi-saved-section .section-title{font-size:.6rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:2px;margin-bottom:.3rem}
-.wifi-saved-item{display:flex;justify-content:space-between;align-items:center;padding:.3rem 0;font-size:.72rem}
-.wifi-saved-item .forget-btn{background:none;border:none;color:var(--red-dim);cursor:pointer;font-family:var(--font-mono);font-size:.65rem}
-.wifi-saved-item .forget-btn:hover{color:var(--red)}
-
-/* ── RESPONSIVE ───────────────────────────────────────── */
-@media(max-width:768px){
-  .main-grid{grid-template-columns:1fr;grid-template-rows:auto auto auto}
-  .stats-panel{grid-column:1;grid-row:1;flex-direction:row;flex-wrap:wrap;border-right:none}
-  .stat-card{flex:1;min-width:100px}
-  .map-panel{grid-column:1;grid-row:2;min-height:200px}
-  .hosts-panel{grid-column:1;grid-row:3}
-  .bottom-grid{grid-template-columns:1fr}
-}
+body{background:#111;color:#eee;font-family:monospace;font-size:14px;padding:1rem}
+h1{color:#0f0;margin-bottom:1rem}
+h2{color:#0ff;margin:1rem 0 .5rem;font-size:1rem;border-bottom:1px solid #333;padding-bottom:.3rem}
+button{background:#222;color:#0f0;border:1px solid #0f0;padding:6px 14px;cursor:pointer;font-family:monospace;font-size:13px;margin:3px}
+button:hover{background:#0f0;color:#000}
+button:disabled{opacity:.4;cursor:wait}
+button.red{border-color:#f33;color:#f33}
+button.red:hover{background:#f33;color:#000}
+button.yellow{border-color:#ff0;color:#ff0}
+button.yellow:hover{background:#ff0;color:#000}
+.section{background:#1a1a1a;border:1px solid #333;padding:.8rem;margin-bottom:.8rem;border-radius:4px}
+.output{background:#000;border:1px solid #333;padding:.5rem;margin-top:.5rem;max-height:400px;overflow:auto;font-size:12px;white-space:pre-wrap;word-break:break-all;border-radius:2px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:.8rem}
+.wifi-net{display:flex;justify-content:space-between;align-items:center;padding:6px 8px;border-bottom:1px solid #222}
+.wifi-net:hover{background:#1a1a1a}
+.signal{color:#0f0}
+.security{color:#ff0;font-size:11px}
+.connected{color:#0f0;font-weight:bold}
+input{background:#000;color:#eee;border:1px solid #333;padding:5px 8px;font-family:monospace;font-size:13px;width:200px}
+input:focus{border-color:#0ff;outline:none}
+.status{padding:4px 8px;border-radius:2px;font-size:12px;display:inline-block;margin:3px}
+.status.ok{background:#040;color:#0f0}
+.status.err{background:#400;color:#f33}
+.status.warn{background:#330;color:#ff0}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;color:#888;padding:4px 8px;border-bottom:1px solid #333}
+td{padding:4px 8px;border-bottom:1px solid #222}
+@media(max-width:700px){.grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
 
-<!-- Matrix rain background -->
-<canvas id="matrix-canvas"></canvas>
-
-<!-- CRT effects -->
-<div class="crt-scanlines"></div>
-<div class="crt-vignette"></div>
-
-<!-- Boot sequence -->
-<div id="boot-screen">
-  <div id="boot-text"></div>
+<h1>PENSTATION</h1>
+<div id="status-bar">
+  <span class="status" id="svc-status">...</span>
+  <span id="time"></span>
 </div>
 
-<!-- Main app -->
-<div id="app">
-  <header>
-    <div class="header-left">
-      <div class="glitch" data-text="PENSTATION">PENSTATION</div>
-    </div>
-    <div class="header-right">
-      <button class="wifi-btn disconnected" id="wifi-btn" onclick="openWifiModal()" title="WiFi Settings">
-        <span class="wifi-icon">&#9783;</span>
-        <span class="wifi-ssid" id="wifi-btn-ssid">NO WIFI</span>
-      </button>
-      <span class="status-badge" id="scan-status">IDLE</span>
-      <span id="clock">00:00:00</span>
-      <div class="live-dot" title="System active"></div>
-    </div>
-  </header>
-
-  <div class="main-grid">
-    <!-- Stat cards -->
-    <div class="stats-panel">
-      <div class="stat-card hosts" data-filter="all" onclick="filterHosts('all')">
-        <div class="label">HOSTS ONLINE</div>
-        <div class="value" id="stat-hosts">0</div>
-      </div>
-      <div class="stat-card critical" data-filter="critical" onclick="filterHosts('critical')">
-        <div class="label">CRITICAL</div>
-        <div class="value" id="stat-critical">0</div>
-      </div>
-      <div class="stat-card high" data-filter="high" onclick="filterHosts('high')">
-        <div class="label">HIGH</div>
-        <div class="value" id="stat-high">0</div>
-      </div>
-      <div class="stat-card medium" data-filter="medium" onclick="filterHosts('medium')">
-        <div class="label">MEDIUM</div>
-        <div class="value" id="stat-medium">0</div>
-      </div>
-      <div class="stat-card scan">
-        <div class="label">LAST SCAN</div>
-        <div class="value" id="stat-scan">--</div>
-      </div>
-    </div>
-
-    <!-- Network map -->
-    <div class="map-panel">
-      <span class="map-label">NETWORK TOPOLOGY</span>
-      <canvas id="network-map"></canvas>
-    </div>
-
-    <!-- Hosts table -->
-    <div class="hosts-panel">
-      <table class="hosts-table">
-        <thead>
-          <tr>
-            <th></th><th>IP</th><th>HOSTNAME</th><th>OS</th><th>PORTS</th><th>RISK</th><th>STATUS</th>
-          </tr>
-        </thead>
-        <tbody id="hosts-tbody"></tbody>
-      </table>
+<div class="grid">
+  <!-- WiFi -->
+  <div class="section">
+    <h2>WiFi</h2>
+    <div id="wifi-status">...</div>
+    <br>
+    <button onclick="wifiScan()">Scan Networks</button>
+    <button class="red" onclick="wifiDisconnect()">Disconnect</button>
+    <div id="wifi-networks"></div>
+    <div id="wifi-connect-form" style="display:none;margin-top:.5rem">
+      <b id="wifi-target"></b><br>
+      <input type="password" id="wifi-pass" placeholder="Password">
+      <button onclick="wifiConnect()">Connect</button>
+      <button class="red" onclick="document.getElementById('wifi-connect-form').style.display='none'">Cancel</button>
     </div>
   </div>
 
-  <!-- Bottom section -->
-  <div class="bottom-grid">
-    <div class="log-panel">
-      <div class="panel-header">LIVE SCAN LOG</div>
-      <div class="log-content" id="log-content"></div>
-    </div>
-    <div class="threat-panel">
-      <div class="panel-header">THREAT MATRIX</div>
-      <div class="threat-bars" id="threat-bars">
-        <div class="threat-row critical"><span class="lbl">CRIT</span><div class="bar"><div class="bar-fill" id="bar-critical" style="width:0"></div></div><span class="cnt" id="cnt-critical">0</span></div>
-        <div class="threat-row high"><span class="lbl">HIGH</span><div class="bar"><div class="bar-fill" id="bar-high" style="width:0"></div></div><span class="cnt" id="cnt-high">0</span></div>
-        <div class="threat-row medium"><span class="lbl">MED</span><div class="bar"><div class="bar-fill" id="bar-medium" style="width:0"></div></div><span class="cnt" id="cnt-medium">0</span></div>
-        <div class="threat-row low"><span class="lbl">LOW</span><div class="bar"><div class="bar-fill" id="bar-low" style="width:0"></div></div><span class="cnt" id="cnt-low">0</span></div>
-      </div>
-    </div>
+  <!-- Adapters -->
+  <div class="section">
+    <h2>WiFi Adapters</h2>
+    <button onclick="loadAdapters()">Refresh</button>
+    <div id="adapters-output" class="output">Click Refresh</div>
   </div>
 
-  <!-- Heatmap -->
-  <div class="heatmap-section">
-    <div class="title">VULNERABILITY HEATMAP — LAST 30 DAYS</div>
-    <div id="heatmap-cells" style="display:flex;gap:3px;flex-wrap:wrap"></div>
+  <!-- Network Scan -->
+  <div class="section">
+    <h2>Network Scan</h2>
+    <button onclick="triggerScan()">Trigger Scan</button>
+    <button onclick="loadHosts()">Load Hosts</button>
+    <button onclick="loadStats()">Stats</button>
+    <div id="hosts-output" class="output">Click Load Hosts</div>
   </div>
 
-  <!-- Alerts -->
-  <div class="heatmap-section">
-    <div class="title">RECENT ALERTS</div>
-    <div id="alerts-list" style="width:100%;max-height:120px;overflow-y:auto"></div>
+  <!-- Vulnerabilities -->
+  <div class="section">
+    <h2>Vulnerabilities</h2>
+    <button onclick="loadVulns()">All Vulns</button>
+    <button onclick="loadVulns('critical')">Critical</button>
+    <button onclick="loadVulns('high')">High</button>
+    <button onclick="loadAlerts()">Alerts</button>
+    <div id="vulns-output" class="output">Click to load</div>
   </div>
 
-  <!-- Ticker -->
-  <div class="ticker">
-    <div class="ticker-inner" id="ticker-inner">
-      <span class="ticker-item">PENSTATION v1.0 // Autonomous Network Security Station // Monitoring active...</span>
-    </div>
+  <!-- Scans History -->
+  <div class="section">
+    <h2>Scan History</h2>
+    <button onclick="loadScans()">Load Scans</button>
+    <div id="scans-output" class="output">Click to load</div>
   </div>
-</div>
 
-<!-- WiFi modal -->
-<div class="wifi-modal-overlay" id="wifi-modal" onclick="if(event.target===this)closeWifiModal()">
-  <div class="wifi-modal modal">
-    <div class="modal-header">
-      <h2>WIFI MANAGER</h2>
-      <button class="modal-close" onclick="closeWifiModal()">[X]</button>
-    </div>
-    <div class="wifi-status-bar" id="wifi-status-bar">
-      <div class="connected-info">
-        <span id="wifi-status-text" style="color:var(--text-dim)">Checking...</span>
-      </div>
-      <button class="wifi-disconnect-btn" id="wifi-disconnect-btn" onclick="wifiDisconnect()" style="display:none">DISCONNECT</button>
-    </div>
-    <button class="wifi-scan-btn" id="wifi-scan-trigger" onclick="wifiScan()">SCAN NETWORKS</button>
-    <div class="wifi-networks" id="wifi-networks"></div>
-    <div class="wifi-password-form" id="wifi-password-form">
-      <div class="form-title">CONNECT TO: <span id="wifi-target-ssid"></span></div>
-      <input type="password" id="wifi-password-input" placeholder="Enter password..." autocomplete="off">
-      <div class="form-actions">
-        <button class="wifi-cancel-btn" onclick="cancelWifiConnect()">CANCEL</button>
-        <button class="wifi-connect-btn" id="wifi-connect-submit" onclick="wifiConnect()">CONNECT</button>
-      </div>
-    </div>
-    <div class="wifi-saved-section" id="wifi-saved-section" style="display:none">
-      <div class="section-title">SAVED NETWORKS</div>
-      <div id="wifi-saved-list"></div>
-    </div>
-  </div>
-</div>
-
-<!-- Host detail modal -->
-<div class="modal-overlay" id="host-modal">
-  <div class="modal">
-    <div class="modal-header">
-      <h2 id="modal-title">HOST</h2>
-      <button class="modal-close" onclick="closeModal()">[X]</button>
-    </div>
-    <div class="modal-tabs">
-      <div class="modal-tab active" onclick="switchTab('overview',this)">OVERVIEW</div>
-      <div class="modal-tab" onclick="switchTab('ports',this)">PORTS</div>
-      <div class="modal-tab" onclick="switchTab('vulns',this)">VULNS</div>
-    </div>
-    <div class="modal-body" id="modal-body"></div>
+  <!-- Raw API -->
+  <div class="section">
+    <h2>Raw API Call</h2>
+    <input type="text" id="api-url" value="/api/stats" style="width:70%">
+    <button onclick="rawApi()">GET</button>
+    <div id="raw-output" class="output">Enter endpoint and click GET</div>
   </div>
 </div>
 
 <script>
-/* ══════════════════════════════════════════════════════════
-   PENSTATION — Frontend Controller
-   ══════════════════════════════════════════════════════════ */
-
 const API = '';
-let hostsData = [];
-let currentFilter = 'all';
-let networkMapData = {nodes:[], edges:[]};
-let selectedHostData = null;
-
-// ── BOOT SEQUENCE ─────────────────────────────────────────
-const bootLines = [
-  'PENSTATION v1.0 — Autonomous Network Security Station',
-  '═══════════════════════════════════════════════════════',
-  '[BIOS] Initializing system...',
-  '[CPU]  ARM Cortex-A53 @ 1.4GHz — OK',
-  '[MEM]  1024 MB DDR2 — OK',
-  '[NET]  Ethernet adapter — LINKED',
-  '[SCAN] Loading nmap engine... OK',
-  '[SCAN] Loading nuclei engine... OK',
-  '[DB]   SQLite database — CONNECTED',
-  '[WS]   WebSocket server — READY',
-  '[SCHD] Scheduler — ARMED',
-  '',
-  '>> All systems nominal. Starting dashboard...',
-  ''
-];
-
-async function runBoot() {
-  const el = document.getElementById('boot-text');
-  for (const line of bootLines) {
-    el.textContent += line + '\n';
-    await sleep(80 + Math.random() * 60);
-  }
-  await sleep(400);
-  document.getElementById('boot-screen').classList.add('hidden');
-  document.getElementById('app').classList.add('visible');
-  setTimeout(() => {
-    document.getElementById('boot-screen').style.display = 'none';
-    initAll();
-  }, 500);
-}
-
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-// ── MATRIX RAIN ───────────────────────────────────────────
-function initMatrixRain() {
-  const canvas = document.getElementById('matrix-canvas');
-  const ctx = canvas.getContext('2d');
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
-  const cols = Math.floor(canvas.width / 14);
-  const drops = new Array(cols).fill(1);
-  const chars = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン0123456789ABCDEF';
-
-  function draw() {
-    ctx.fillStyle = 'rgba(8,12,16,0.05)';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = '#39ff6a';
-    ctx.font = '12px monospace';
-    for (let i = 0; i < drops.length; i++) {
-      const ch = chars[Math.floor(Math.random() * chars.length)];
-      ctx.fillText(ch, i * 14, drops[i] * 14);
-      if (drops[i] * 14 > canvas.height && Math.random() > 0.975) drops[i] = 0;
-      drops[i]++;
-    }
-  }
-  setInterval(draw, 50);
-  window.addEventListener('resize', () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; });
-}
-
-// ── CLOCK ─────────────────────────────────────────────────
-function updateClock() {
-  const now = new Date();
-  document.getElementById('clock').textContent = now.toTimeString().split(' ')[0];
-}
-
-// ── PIXEL AVATAR ──────────────────────────────────────────
-function generateAvatar(ip) {
-  const canvas = document.createElement('canvas');
-  canvas.width = 32; canvas.height = 32;
-  const ctx = canvas.getContext('2d');
-  // Deterministic seed from IP
-  let seed = 0;
-  for (let i = 0; i < ip.length; i++) seed = ((seed << 5) - seed + ip.charCodeAt(i)) | 0;
-  function rand() { seed = (seed * 16807 + 0) % 2147483647; return (seed & 0x7fffffff) / 2147483647; }
-
-  const colors = ['#39ff6a','#00e5ff','#ff2244','#ffcc00','#ff8800','#aa44ff'];
-  const mainColor = colors[Math.abs(seed) % colors.length];
-  ctx.fillStyle = '#0c1117';
-  ctx.fillRect(0, 0, 32, 32);
-
-  // Symmetric pixel pattern (mirror left half to right)
-  for (let y = 4; y < 28; y += 4) {
-    for (let x = 4; x < 16; x += 4) {
-      if (rand() > 0.45) {
-        ctx.fillStyle = rand() > 0.7 ? '#1a2233' : mainColor;
-        ctx.fillRect(x, y, 4, 4);
-        ctx.fillRect(32 - x - 4, y, 4, 4); // mirror
-      }
-    }
-  }
-  return canvas.toDataURL();
-}
-
-// ── DATA FETCHING ─────────────────────────────────────────
-async function fetchStats() {
-  try {
-    const res = await fetch(API + '/api/stats');
-    const data = await res.json();
-    document.getElementById('stat-hosts').textContent = data.hosts_active || 0;
-    document.getElementById('stat-critical').textContent = data.vulns?.critical || 0;
-    document.getElementById('stat-high').textContent = data.vulns?.high || 0;
-    document.getElementById('stat-medium').textContent = data.vulns?.medium || 0;
-    if (data.last_scan?.started_at) {
-      const d = new Date(data.last_scan.started_at);
-      document.getElementById('stat-scan').textContent = d.toLocaleTimeString();
-      document.getElementById('scan-status').textContent = (data.last_scan.status || 'IDLE').toUpperCase();
-    }
-    updateThreatBars(data.vulns || {});
-  } catch(e) { console.error('Stats fetch error:', e); }
-}
-
-async function fetchHosts() {
-  try {
-    const res = await fetch(API + '/api/hosts');
-    hostsData = await res.json();
-    renderHostsTable();
-  } catch(e) { console.error('Hosts fetch error:', e); }
-}
-
-async function fetchNetworkMap() {
-  try {
-    const res = await fetch(API + '/api/network/map');
-    networkMapData = await res.json();
-    drawNetworkMap();
-  } catch(e) { console.error('Map fetch error:', e); }
-}
-
-async function fetchAlerts() {
-  try {
-    const res = await fetch(API + '/api/alerts');
-    const data = await res.json();
-    const el = document.getElementById('alerts-list');
-    el.innerHTML = data.slice(0, 30).map(a => `
-      <div class="alert-item">
-        <span class="time">${new Date(a.timestamp).toLocaleTimeString()}</span>
-        <span class="sev-badge ${a.severity}">${a.severity}</span>
-        <span>${a.message}</span>
-      </div>
-    `).join('');
-  } catch(e) {}
-}
-
-async function fetchHeatmap() {
-  try {
-    const res = await fetch(API + '/api/heatmap');
-    const data = await res.json();
-    const el = document.getElementById('heatmap-cells');
-    // Fill 30 days
-    const today = new Date();
-    let html = '';
-    for (let i = 29; i >= 0; i--) {
-      const d = new Date(today); d.setDate(d.getDate() - i);
-      const key = d.toISOString().split('T')[0];
-      const entry = data.find(e => e.date === key);
-      const sev = entry ? entry.severity : 'none';
-      html += `<div class="heat-cell ${sev}" title="${key}: ${sev}"></div>`;
-    }
-    el.innerHTML = html;
-  } catch(e) {}
-}
-
-// ── HOSTS TABLE ───────────────────────────────────────────
-function renderHostsTable() {
-  const tbody = document.getElementById('hosts-tbody');
-  let filtered = hostsData;
-  if (currentFilter !== 'all') {
-    filtered = hostsData.filter(h => {
-      if (currentFilter === 'critical') return (h.vulns?.critical || 0) > 0;
-      if (currentFilter === 'high') return (h.vulns?.high || 0) > 0;
-      if (currentFilter === 'medium') return (h.vulns?.medium || 0) > 0;
-      return true;
-    });
-  }
-
-  tbody.innerHTML = filtered.map(h => {
-    const avatar = generateAvatar(h.ip);
-    const risk = h.risk_score || 0;
-    const riskColor = risk >= 75 ? 'var(--red)' : risk >= 50 ? 'var(--orange)' : risk >= 25 ? 'var(--yellow)' : 'var(--green)';
-    const maxSev = (h.vulns?.critical > 0) ? 'critical' : (h.vulns?.high > 0) ? 'high' : (h.vulns?.medium > 0) ? 'medium' : (h.vulns?.low > 0) ? 'low' : 'none';
-    return `<tr onclick="openHostModal('${h.ip}')">
-      <td><img src="${avatar}" class="host-avatar"></td>
-      <td>${h.ip}</td>
-      <td>${h.hostname || '—'}</td>
-      <td style="color:var(--text-dim);font-size:.7rem">${h.os_name || '?'}</td>
-      <td>${h.ports_count || 0}</td>
-      <td><div class="risk-bar"><div class="risk-bar-fill" style="width:${risk}%;background:${riskColor}"></div></div> ${risk}</td>
-      <td><span class="sev-badge ${maxSev}">${maxSev}</span></td>
-    </tr>`;
-  }).join('');
-}
-
-function filterHosts(filter) {
-  currentFilter = filter;
-  document.querySelectorAll('.stat-card').forEach(c => c.style.borderColor = '');
-  const card = document.querySelector(`.stat-card[data-filter="${filter}"]`);
-  if (card) card.style.borderColor = 'var(--green)';
-  renderHostsTable();
-}
-
-// ── THREAT BARS ───────────────────────────────────────────
-function updateThreatBars(vulns) {
-  const max = Math.max(vulns.critical||0, vulns.high||0, vulns.medium||0, vulns.low||0, 1);
-  for (const sev of ['critical','high','medium','low']) {
-    const val = vulns[sev] || 0;
-    document.getElementById('bar-'+sev).style.width = (val/max*100)+'%';
-    document.getElementById('cnt-'+sev).textContent = val;
-  }
-}
-
-// ── NETWORK MAP ───────────────────────────────────────────
-let mapNodes = [];
-let mapAnimFrame;
-
-function drawNetworkMap() {
-  const canvas = document.getElementById('network-map');
-  const rect = canvas.parentElement.getBoundingClientRect();
-  canvas.width = rect.width;
-  canvas.height = rect.height;
-  const ctx = canvas.getContext('2d');
-  const cx = canvas.width / 2, cy = canvas.height / 2;
-
-  // Position nodes
-  mapNodes = [];
-  const nodes = networkMapData.nodes || [];
-  const edges = networkMapData.edges || [];
-
-  nodes.forEach((n, i) => {
-    if (n.type === 'router') {
-      mapNodes.push({...n, x: cx, y: cy, r: 16});
-    } else {
-      const angle = (i - 1) / (nodes.length - 1) * Math.PI * 2 - Math.PI / 2;
-      const radius = Math.min(cx, cy) * 0.6;
-      mapNodes.push({...n, x: cx + Math.cos(angle) * radius, y: cy + Math.sin(angle) * radius, r: 10});
-    }
-  });
-
-  let tick = 0;
-  function animate() {
-    tick++;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    // Draw edges
-    edges.forEach(e => {
-      const from = mapNodes.find(n => n.id === e.from);
-      const to = mapNodes.find(n => n.id === e.to);
-      if (!from || !to) return;
-      ctx.beginPath();
-      ctx.moveTo(from.x, from.y);
-      ctx.lineTo(to.x, to.y);
-      ctx.strokeStyle = 'rgba(57,255,106,0.15)';
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 4]);
-      ctx.lineDashOffset = -tick * 0.3;
-      ctx.stroke();
-      ctx.setLineDash([]);
-    });
-
-    // Draw nodes
-    mapNodes.forEach(n => {
-      const pulse = Math.sin(tick * 0.05) * 2;
-      const r = n.r + pulse;
-      const col = n.type === 'router' ? '#00e5ff' :
-                  n.severity === 'critical' ? '#ff2244' :
-                  n.severity === 'high' ? '#ff8800' :
-                  n.severity === 'medium' ? '#ffcc00' :
-                  n.severity === 'low' ? '#00e5ff' : '#39ff6a';
-
-      // Glow
-      ctx.beginPath();
-      ctx.arc(n.x, n.y, r + 4, 0, Math.PI * 2);
-      ctx.fillStyle = col.replace(')', ',0.1)').replace('rgb', 'rgba').replace('#', '');
-      // Simpler glow
-      const grad = ctx.createRadialGradient(n.x, n.y, r, n.x, n.y, r + 8);
-      grad.addColorStop(0, col + '33');
-      grad.addColorStop(1, 'transparent');
-      ctx.fillStyle = grad;
-      ctx.fill();
-
-      // Node circle
-      ctx.beginPath();
-      ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
-      ctx.fillStyle = n.severity === 'critical' && tick % 30 < 15 ? '#ff2244' : '#0c1117';
-      ctx.fill();
-      ctx.strokeStyle = col;
-      ctx.lineWidth = 2;
-      ctx.stroke();
-
-      // Label
-      ctx.fillStyle = '#c0ccda';
-      ctx.font = '9px "Share Tech Mono"';
-      ctx.textAlign = 'center';
-      ctx.fillText(n.label || n.id, n.x, n.y + r + 14);
-    });
-
-    mapAnimFrame = requestAnimationFrame(animate);
-  }
-  if (mapAnimFrame) cancelAnimationFrame(mapAnimFrame);
-  animate();
-
-  // Click handler
-  canvas.onclick = (e) => {
-    const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
-    for (const n of mapNodes) {
-      const dx = mx - n.x, dy = my - n.y;
-      if (dx*dx + dy*dy < (n.r+4)*(n.r+4) && n.type !== 'router') {
-        openHostModal(n.ip || n.id);
-        break;
-      }
-    }
-  };
-}
-
-// ── HOST MODAL ────────────────────────────────────────────
-const PORT_ICONS = {80:'🌐',443:'🌐',8080:'⚙️',8443:'⚙️',8000:'⚙️',8888:'⚙️',22:'💻',3306:'🗄️',5432:'🗄️',21:'📁',445:'🪟',139:'🪟',25:'📧',3389:'🖥️',6379:'🗄️',27017:'🗄️',53:'🔤',161:'📡'};
-
-async function openHostModal(ip) {
-  try {
-    const res = await fetch(API + '/api/host/' + ip);
-    selectedHostData = await res.json();
-    document.getElementById('modal-title').textContent = `${ip} — ${selectedHostData.hostname || 'UNKNOWN'}`;
-    switchTab('overview');
-    document.getElementById('host-modal').classList.add('open');
-  } catch(e) { console.error(e); }
-}
-
-function closeModal() {
-  document.getElementById('host-modal').classList.remove('open');
-}
-
-function switchTab(tab, tabEl) {
-  document.querySelectorAll('.modal-tab').forEach(t => t.classList.remove('active'));
-  if (tabEl) tabEl.classList.add('active');
-  else document.querySelector(`.modal-tab:nth-child(${tab==='overview'?1:tab==='ports'?2:3})`).classList.add('active');
-
-  const body = document.getElementById('modal-body');
-  const h = selectedHostData;
-  if (!h) return;
-
-  if (tab === 'overview') {
-    body.innerHTML = `
-      <table>
-        <tr><th>IP</th><td>${h.ip}</td></tr>
-        <tr><th>MAC</th><td>${h.mac || '—'} ${h.mac_vendor ? '('+h.mac_vendor+')' : ''}</td></tr>
-        <tr><th>Hostname</th><td>${h.hostname || '—'}</td></tr>
-        <tr><th>OS</th><td>${h.os_name || '?'} ${h.os_version || ''}</td></tr>
-        <tr><th>Status</th><td>${h.status}</td></tr>
-        <tr><th>Risk Score</th><td style="color:${h.risk_score>=75?'var(--red)':h.risk_score>=50?'var(--orange)':'var(--green)'}">${h.risk_score}/100</td></tr>
-        <tr><th>First Seen</th><td>${h.first_seen ? new Date(h.first_seen).toLocaleString() : '—'}</td></tr>
-        <tr><th>Last Seen</th><td>${h.last_seen ? new Date(h.last_seen).toLocaleString() : '—'}</td></tr>
-        <tr><th>Open Ports</th><td>${h.ports?.length || 0}</td></tr>
-        <tr><th>Vulnerabilities</th><td>${h.vulns?.length || 0}</td></tr>
-      </table>`;
-  } else if (tab === 'ports') {
-    body.innerHTML = `<table>
-      <tr><th></th><th>PORT</th><th>PROTO</th><th>SERVICE</th><th>VERSION</th></tr>
-      ${(h.ports||[]).map(p => `<tr>
-        <td class="port-icon">${PORT_ICONS[p.port] || '🔌'}</td>
-        <td>${p.port}</td>
-        <td>${p.protocol}</td>
-        <td>${p.service || '—'}</td>
-        <td style="color:var(--text-dim)">${p.version || '—'}</td>
-      </tr>`).join('')}
-    </table>`;
-  } else if (tab === 'vulns') {
-    if (!h.vulns?.length) {
-      body.innerHTML = '<p style="color:var(--green);padding:1rem">No vulnerabilities found.</p>';
-      return;
-    }
-    body.innerHTML = (h.vulns||[]).map((v, i) => `
-      <div class="vuln-item" onclick="this.querySelector('.vuln-item-body').classList.toggle('open')">
-        <div class="vuln-item-header">
-          <span><span class="sev-badge ${v.severity}">${v.severity}</span> ${v.name || v.template_id}</span>
-          <span style="color:var(--text-dim);font-size:.65rem">${v.cve_id || ''}</span>
-        </div>
-        <div class="vuln-item-body">
-          <p>${v.description || 'No description'}</p>
-          ${v.remediation ? '<p style="margin-top:.4rem;color:var(--green)"><b>Remediation:</b> '+v.remediation+'</p>' : ''}
-          ${v.reference_url ? '<p style="margin-top:.3rem"><a href="'+v.reference_url+'" target="_blank">'+v.reference_url+'</a></p>' : ''}
-          <p style="margin-top:.3rem;color:var(--text-dim)">Port: ${v.port} | Found: ${v.found_at ? new Date(v.found_at).toLocaleString() : '—'}</p>
-        </div>
-      </div>
-    `).join('');
-  }
-}
-
-// Close modal on overlay click
-document.getElementById('host-modal').addEventListener('click', function(e) {
-  if (e.target === this) closeModal();
-});
-
-// ── WEBSOCKET ─────────────────────────────────────────────
-let logWs, alertWs;
-
-function connectLogWs() {
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  logWs = new WebSocket(proto + '//' + location.host + '/ws/logs');
-  logWs.onmessage = (e) => {
-    const data = JSON.parse(e.data);
-    appendLog(data.level, data.message, data.timestamp);
-  };
-  logWs.onclose = () => setTimeout(connectLogWs, 3000);
-  logWs.onerror = () => logWs.close();
-}
-
-function connectAlertWs() {
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  alertWs = new WebSocket(proto + '//' + location.host + '/ws/alerts');
-  alertWs.onmessage = (e) => {
-    const data = JSON.parse(e.data);
-    if (data.severity === 'critical' || data.type === 'critical_vuln') {
-      triggerCriticalFlash();
-      playAlertBeep();
-    }
-    addTickerItem(data.message, data.severity);
-    // Refresh data
-    fetchStats(); fetchHosts();
-  };
-  alertWs.onclose = () => setTimeout(connectAlertWs, 3000);
-  alertWs.onerror = () => alertWs.close();
-}
-
-function appendLog(level, message, timestamp) {
-  const el = document.getElementById('log-content');
-  const time = timestamp ? new Date(timestamp).toLocaleTimeString() : new Date().toLocaleTimeString();
-  const div = document.createElement('div');
-  div.className = 'log-line ' + (level||'INFO');
-  div.textContent = `[${time}] [${level}] ${message}`;
-  el.appendChild(div);
-  // Auto-scroll
-  el.scrollTop = el.scrollHeight;
-  // Limit lines
-  while (el.children.length > 300) el.removeChild(el.firstChild);
-}
-
-// ── CRITICAL FLASH ────────────────────────────────────────
-function triggerCriticalFlash() {
-  const flash = document.createElement('div');
-  flash.className = 'critical-flash';
-  document.body.appendChild(flash);
-  setTimeout(() => flash.remove(), 500);
-}
-
-// ── ALERT BEEP ────────────────────────────────────────────
-function playAlertBeep() {
-  try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.frequency.value = 880;
-    osc.type = 'square';
-    gain.gain.value = 0.1;
-    osc.start();
-    osc.stop(ctx.currentTime + 0.15);
-  } catch(e) {}
-}
-
-// ── TICKER ────────────────────────────────────────────────
-function addTickerItem(text, severity) {
-  const inner = document.getElementById('ticker-inner');
-  const span = document.createElement('span');
-  span.className = 'ticker-item' + (severity === 'critical' ? ' critical' : '');
-  span.textContent = text + ' // ';
-  inner.appendChild(span);
-}
-
-// ── WIFI MANAGER ──────────────────────────────────────────
 let wifiTargetSsid = '';
-let wifiIsScanning = false;
 
-function openWifiModal() {
-  document.getElementById('wifi-modal').classList.add('open');
-  fetchWifiStatus();
-  wifiScan();
-  fetchWifiSaved();
-}
-
-function closeWifiModal() {
-  document.getElementById('wifi-modal').classList.remove('open');
-  cancelWifiConnect();
-}
-
-async function fetchWifiStatus() {
+// Helpers
+async function api(url, opts) {
   try {
-    const res = await fetch(API + '/api/wifi/status');
-    const data = await res.json();
-    const btn = document.getElementById('wifi-btn');
-    const btnSsid = document.getElementById('wifi-btn-ssid');
-    const statusText = document.getElementById('wifi-status-text');
-    const disconnectBtn = document.getElementById('wifi-disconnect-btn');
-
-    if (data.connected) {
-      btn.classList.remove('disconnected');
-      btnSsid.textContent = data.ssid || 'CONNECTED';
-      const signalHtml = renderSignalBars(data.signal || 0);
-      statusText.innerHTML = `<span style="color:var(--green)">&#9679;</span> Connected to <b>${data.ssid}</b> &nbsp;${signalHtml}&nbsp; <span style="color:var(--text-dim)">${data.ip || ''}</span>`;
-      disconnectBtn.style.display = '';
-    } else {
-      btn.classList.add('disconnected');
-      btnSsid.textContent = 'NO WIFI';
-      statusText.innerHTML = '<span style="color:var(--red)">&#9679;</span> Disconnected';
-      disconnectBtn.style.display = 'none';
-    }
+    const res = await fetch(API + url, opts);
+    return await res.json();
   } catch(e) {
-    console.error('WiFi status error:', e);
-    document.getElementById('wifi-status-text').innerHTML = '<span style="color:var(--yellow)">&#9679;</span> Unable to check WiFi';
+    return {error: e.message};
   }
 }
 
-function renderSignalBars(signal) {
-  const bars = [20, 40, 60, 80];
-  return `<span class="signal-bars" style="display:inline-flex;gap:2px;align-items:flex-end;height:12px;vertical-align:middle">` +
-    bars.map((thresh, i) => {
-      const h = 4 + i * 3;
-      const active = signal >= thresh;
-      return `<span class="bar" style="width:3px;height:${h}px;border-radius:1px;background:${active ? 'var(--green)' : 'var(--border)'}"></span>`;
-    }).join('') + `</span>`;
+function $(id) { return document.getElementById(id); }
+
+function json(data) { return JSON.stringify(data, null, 2); }
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+// Status
+async function checkStatus() {
+  try {
+    const data = await api('/api/stats');
+    $('svc-status').className = 'status ok';
+    $('svc-status').textContent = 'ONLINE';
+  } catch {
+    $('svc-status').className = 'status err';
+    $('svc-status').textContent = 'OFFLINE';
+  }
 }
 
+// WiFi Status
+async function loadWifiStatus() {
+  const data = await api('/api/wifi/status');
+  if (data.connected) {
+    $('wifi-status').innerHTML = `<span class="connected">Connected:</span> ${esc(data.ssid||'')} | Signal: ${data.signal||'?'}% | IP: ${data.ip||'?'}`;
+  } else {
+    $('wifi-status').innerHTML = '<span style="color:#f33">Disconnected</span>';
+  }
+}
+
+// WiFi Scan
 async function wifiScan() {
-  if (wifiIsScanning) return;
-  wifiIsScanning = true;
-  const btn = document.getElementById('wifi-scan-trigger');
-  btn.disabled = true;
-  btn.classList.add('scanning');
-  btn.textContent = 'SCANNING...';
-  const container = document.getElementById('wifi-networks');
-  container.innerHTML = '<div style="padding:1rem;text-align:center;color:var(--text-dim);font-size:.72rem">Scanning for networks...</div>';
-
-  try {
-    const res = await fetch(API + '/api/wifi/scan');
-    const data = await res.json();
-    renderWifiNetworks(data.networks || data || []);
-  } catch(e) {
-    container.innerHTML = '<div style="padding:1rem;text-align:center;color:var(--red);font-size:.72rem">Scan failed</div>';
-  } finally {
-    wifiIsScanning = false;
-    btn.disabled = false;
-    btn.classList.remove('scanning');
-    btn.textContent = 'SCAN NETWORKS';
-  }
-}
-
-function renderWifiNetworks(networks) {
-  const container = document.getElementById('wifi-networks');
-  if (!networks.length) {
-    container.innerHTML = '<div style="padding:1rem;text-align:center;color:var(--text-dim);font-size:.72rem">No networks found</div>';
+  $('wifi-networks').innerHTML = '<div style="color:#888;padding:8px">Scanning...</div>';
+  const data = await api('/api/wifi/scan');
+  const nets = data.networks || data || [];
+  if (!nets.length) {
+    $('wifi-networks').innerHTML = '<div style="color:#f33;padding:8px">No networks found</div>';
     return;
   }
-
-  container.innerHTML = networks.map(n => {
-    const bars = [20, 40, 60, 80];
-    const signalBars = bars.map((thresh, i) => {
-      const h = 3 + i * 2.5;
-      const active = n.signal >= thresh;
-      const color = active ? (n.signal >= 60 ? 'var(--green)' : n.signal >= 30 ? 'var(--yellow)' : 'var(--red)') : 'var(--border)';
-      return `<div class="bar" style="height:${h}px;background:${color}"></div>`;
-    }).join('');
-
-    return `<div class="wifi-network ${n.connected ? 'active' : ''}" onclick="selectWifiNetwork('${escHtml(n.ssid)}', ${n.connected})">
-      <div class="net-left">
-        ${n.connected ? '<span style="color:var(--green);font-size:.8rem">&#9679;</span>' : ''}
-        <span class="net-ssid">${escHtml(n.ssid)}</span>
-        ${n.security ? `<span class="net-security">${escHtml(n.security)}</span>` : ''}
-      </div>
-      <div class="net-signal">${signalBars}</div>
-    </div>`;
-  }).join('');
+  $('wifi-networks').innerHTML = nets.map(n =>
+    `<div class="wifi-net" onclick="selectWifi('${esc(n.ssid)}')">
+      <span>${n.connected?'<span class="connected">[*] </span>':''}${esc(n.ssid)} <span class="security">${esc(n.security||'')}</span></span>
+      <span class="signal">${n.signal}%</span>
+    </div>`
+  ).join('');
 }
 
-function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
-
-function selectWifiNetwork(ssid, isConnected) {
-  if (isConnected) return;
+function selectWifi(ssid) {
   wifiTargetSsid = ssid;
-  document.getElementById('wifi-target-ssid').textContent = ssid;
-  document.getElementById('wifi-password-input').value = '';
-  document.getElementById('wifi-password-form').classList.add('open');
-  document.getElementById('wifi-password-input').focus();
-}
-
-function cancelWifiConnect() {
-  wifiTargetSsid = '';
-  document.getElementById('wifi-password-form').classList.remove('open');
-  document.getElementById('wifi-password-input').value = '';
+  $('wifi-target').textContent = 'Connect to: ' + ssid;
+  $('wifi-pass').value = '';
+  $('wifi-connect-form').style.display = 'block';
+  $('wifi-pass').focus();
 }
 
 async function wifiConnect() {
-  if (!wifiTargetSsid) return;
-  const password = document.getElementById('wifi-password-input').value;
-  const btn = document.getElementById('wifi-connect-submit');
-  btn.disabled = true;
-  btn.textContent = 'CONNECTING...';
-
-  try {
-    const res = await fetch(API + '/api/wifi/connect', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ssid: wifiTargetSsid, password: password}),
-    });
-    const data = await res.json();
-    if (data.success) {
-      cancelWifiConnect();
-      fetchWifiStatus();
-      wifiScan();
-      fetchWifiSaved();
-      appendLog('OK', `WiFi connected to ${wifiTargetSsid}`);
-    } else {
-      alert('Connection failed: ' + (data.error || 'Unknown error'));
-    }
-  } catch(e) {
-    alert('Connection error: ' + e.message);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = 'CONNECT';
-  }
+  const pass = $('wifi-pass').value;
+  const data = await api('/api/wifi/connect', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ssid: wifiTargetSsid, password: pass})
+  });
+  alert(data.success ? 'Connected!' : 'Failed: ' + (data.error||'unknown'));
+  $('wifi-connect-form').style.display = 'none';
+  loadWifiStatus();
 }
-
-// Allow Enter key to submit password
-document.addEventListener('keydown', function(e) {
-  if (e.key === 'Enter' && document.getElementById('wifi-password-form').classList.contains('open')) {
-    wifiConnect();
-  }
-});
 
 async function wifiDisconnect() {
-  try {
-    const res = await fetch(API + '/api/wifi/disconnect', {method: 'POST'});
-    const data = await res.json();
-    if (data.success) {
-      fetchWifiStatus();
-      wifiScan();
-      appendLog('WARN', 'WiFi disconnected');
-    }
-  } catch(e) { console.error(e); }
+  const data = await api('/api/wifi/disconnect', {method:'POST'});
+  alert(data.success ? 'Disconnected' : 'Failed');
+  loadWifiStatus();
 }
 
-async function fetchWifiSaved() {
-  try {
-    const res = await fetch(API + '/api/wifi/saved');
-    const data = await res.json();
-    const section = document.getElementById('wifi-saved-section');
-    const list = document.getElementById('wifi-saved-list');
-    if (data.length) {
-      section.style.display = '';
-      list.innerHTML = data.map(n => `
-        <div class="wifi-saved-item">
-          <span>${escHtml(n.ssid)}</span>
-          <button class="forget-btn" onclick="event.stopPropagation();wifiForget('${escHtml(n.ssid)}')">[forget]</button>
-        </div>
-      `).join('');
-    } else {
-      section.style.display = 'none';
-    }
-  } catch(e) {}
-}
-
-async function wifiForget(ssid) {
-  try {
-    await fetch(API + '/api/wifi/forget', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ssid: ssid}),
-    });
-    fetchWifiSaved();
-  } catch(e) {}
-}
-
-// ── INIT ──────────────────────────────────────────────────
-function initAll() {
-  initMatrixRain();
-  setInterval(updateClock, 1000);
-  updateClock();
-
-  // Initial fetch
-  fetchStats();
-  fetchHosts();
-  fetchNetworkMap();
-  fetchAlerts();
-  fetchHeatmap();
-  fetchWifiStatus();
-
-  // Periodic refresh
-  setInterval(fetchStats, 15000);
-  setInterval(fetchHosts, 30000);
-  setInterval(fetchNetworkMap, 30000);
-  setInterval(fetchAlerts, 30000);
-  setInterval(fetchHeatmap, 60000);
-  setInterval(fetchWifiStatus, 20000);
-
-  // WebSocket
-  connectLogWs();
-  connectAlertWs();
-
-  // Resize map
-  window.addEventListener('resize', () => {
-    if (networkMapData.nodes.length) drawNetworkMap();
+// Adapters
+async function loadAdapters() {
+  const data = await api('/api/wifi/adapters');
+  if (!data.length) {
+    $('adapters-output').textContent = 'No adapters found';
+    return;
+  }
+  let html = '<table><tr><th>Interface</th><th>Driver</th><th>Monitor</th><th>Injection</th><th>Role</th></tr>';
+  data.forEach(a => {
+    html += `<tr>
+      <td>${a.interface}</td>
+      <td>${a.driver||'?'}</td>
+      <td>${a.supports_monitor?'YES':'NO'}</td>
+      <td>${a.supports_injection?'YES':'NO'}</td>
+      <td>${a.role||'-'}</td>
+    </tr>`;
   });
+  html += '</table>';
+  $('adapters-output').innerHTML = html;
 }
 
-// ── START ─────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', runBoot);
+// Hosts
+async function loadHosts() {
+  const data = await api('/api/hosts');
+  if (!data.length) {
+    $('hosts-output').textContent = 'No hosts found';
+    return;
+  }
+  let html = '<table><tr><th>IP</th><th>Hostname</th><th>OS</th><th>Ports</th><th>Risk</th><th>Vulns</th></tr>';
+  data.forEach(h => {
+    const v = h.vulns||{};
+    html += `<tr>
+      <td>${h.ip}</td>
+      <td>${h.hostname||'-'}</td>
+      <td>${h.os_name||'?'}</td>
+      <td>${h.ports_count||0}</td>
+      <td>${h.risk_score||0}</td>
+      <td>C:${v.critical||0} H:${v.high||0} M:${v.medium||0}</td>
+    </tr>`;
+  });
+  html += '</table>';
+  $('hosts-output').innerHTML = html;
+}
+
+async function loadStats() {
+  const data = await api('/api/stats');
+  $('hosts-output').textContent = json(data);
+}
+
+async function triggerScan() {
+  const data = await api('/api/scan/trigger', {method:'POST'});
+  $('hosts-output').textContent = json(data);
+}
+
+// Vulns
+async function loadVulns(sev) {
+  const url = sev ? `/api/vulns?severity=${sev}` : '/api/vulns';
+  const data = await api(url);
+  $('vulns-output').textContent = json(data);
+}
+
+async function loadAlerts() {
+  const data = await api('/api/alerts');
+  $('vulns-output').textContent = json(data);
+}
+
+// Scans
+async function loadScans() {
+  const data = await api('/api/scans');
+  $('scans-output').textContent = json(data);
+}
+
+// Raw API
+async function rawApi() {
+  const url = $('api-url').value;
+  const data = await api(url);
+  $('raw-output').textContent = json(data);
+}
+
+// Clock
+setInterval(() => {
+  $('time').textContent = new Date().toLocaleTimeString();
+}, 1000);
+
+// Init
+checkStatus();
+loadWifiStatus();
+setInterval(checkStatus, 30000);
+setInterval(loadWifiStatus, 20000);
 </script>
 </body>
 </html>

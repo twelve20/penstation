@@ -957,8 +957,8 @@ async function wifiScan() {
 
   try {
     const res = await fetch(API + '/api/wifi/scan');
-    const networks = await res.json();
-    renderWifiNetworks(networks);
+    const data = await res.json();
+    renderWifiNetworks(data.networks || data || []);
   } catch(e) {
     container.innerHTML = '<div style="padding:1rem;text-align:center;color:var(--red);font-size:.72rem">Scan failed</div>';
   } finally {

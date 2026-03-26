@@ -1,9 +1,4 @@
 __pycache__/
 *.pyc
-*.pyo
-venv/
+scan_results.json
 .env
-data/*.db
-logs/*.log
-*.egg-info/
-.claude/

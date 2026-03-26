@@ -178,18 +178,35 @@ def scan_ports(ip, mode="quick"):
         version_cmd = ["nmap", "-Pn", "-sV", "-T4",
                        "--version-intensity", "5",
                        "-p", port_list, "-oX", "-", ip]
-        timeout2 = 120
+        timeout2 = 180
 
-        if mode == "vuln":
-            version_cmd = ["nmap", "-Pn", "-sV", "-T4",
-                           "--version-intensity", "5",
-                           "-p", port_list,
-                           "--script", "vulners,vuln",
-                           "-oX", "-", ip]
-            timeout2 = 240
-
-        print(f"    [{ip}] pass 2: detecting services{' + vulns' if mode == 'vuln' else ''}...")
+        print(f"    [{ip}] pass 2: detecting services...")
         result = subprocess.run(version_cmd, capture_output=True, text=True, timeout=timeout2)
+
+        # Pass 3 (vuln mode only): run vuln scripts separately per port
+        vuln_results = {}  # port_id -> [vulns]
+        if mode == "vuln":
+            print(f"    [{ip}] pass 3: checking vulnerabilities...")
+            for p in open_ports:
+                try:
+                    print(f"      checking port {p}...")
+                    vuln_cmd = ["nmap", "-Pn", "-sV", "-T4",
+                                "-p", p,
+                                "--script", "vulners",
+                                "-oX", "-", ip]
+                    vresult = subprocess.run(vuln_cmd, capture_output=True, text=True, timeout=90)
+                    vroot = ET.fromstring(vresult.stdout)
+                    for port_el in vroot.findall(".//port"):
+                        for script in port_el.findall(".//script"):
+                            script_id = script.get("id", "")
+                            output = script.get("output", "").strip()
+                            if output:
+                                vuln_results.setdefault(p, []).append({
+                                    "script": script_id, "output": output
+                                })
+                except (subprocess.TimeoutExpired, ET.ParseError):
+                    print(f"      port {p} — timed out or failed, skipping")
+                    continue
 
         root = ET.fromstring(result.stdout)
 
@@ -212,13 +229,8 @@ def scan_ports(ip, mode="quick"):
                     extra = service_el.get("extrainfo", "")
                     service_version = " ".join(filter(None, [product, version, extra]))
 
-                # collect vuln script output
-                vulns = []
-                for script in port_el.findall(".//script"):
-                    script_id = script.get("id", "")
-                    output = script.get("output", "").strip()
-                    if output and ("VULNERABLE" in output or "vulners" in script_id):
-                        vulns.append({"script": script_id, "output": output})
+                # collect vulns from pass 3
+                vulns = vuln_results.get(port_id, [])
 
                 ports.append({
                     "port": int(port_id),

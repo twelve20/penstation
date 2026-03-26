@@ -13,6 +13,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 from brute import check_default_creds, print_cred_results
 from fingerprint import fingerprint_device, detect_os
+from traceroute import interactive_traceroute
+from watchdog import run_watchdog, manage_known_devices
+from wifi_monitor import interactive_wifi_scan
 
 print_lock = Lock()
 
@@ -438,22 +441,8 @@ def pick_scan_mode():
 # Main
 # ──────────────────────────────────────────────────────────────
 
-def main():
-    print("\n[*] PENSTATION — LAN Scanner & Vulnerability Checker")
-    print(f"[*] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
-    interfaces = get_interfaces()
-    if not interfaces:
-        print("[!] No active network interfaces found.")
-        sys.exit(1)
-
-    print(f"[*] Active interfaces:")
-    for iface in interfaces:
-        print(f"    - {iface['name']}: {iface['ip']}/{iface['prefix']}")
-
-    local_ips = {iface["ip"] for iface in interfaces}
-    local_ip = interfaces[0]["ip"]
-
+def run_lan_scan(interfaces, local_ips, local_ip):
+    """Run the full LAN scan + port scan flow."""
     # ── Phase 1: Device discovery ──
     all_devices = []
     for iface in interfaces:
@@ -486,14 +475,12 @@ def main():
     else:
         targets = pick_targets(sorted_devices)
         if not targets:
-            print("[*] Done.")
             return
         mode = pick_scan_mode()
 
     check_creds = mode == "vuln+creds"
     scan_mode = "vuln" if check_creds else mode
 
-    # build ip → device lookup for fingerprinting
     device_map = {d["ip"]: d for d in sorted_devices}
 
     start_time = time.time()
@@ -505,7 +492,6 @@ def main():
         "targets": [],
     }
 
-    # parallel scanning: each target in its own thread
     if len(targets) > 1:
         max_workers = min(len(targets), 3)
         print(f"[*] Scanning {len(targets)} targets in parallel ({max_workers} workers)\n")
@@ -544,7 +530,65 @@ def main():
     print(f"    {open_count} open port(s)")
     print(f"    {vuln_count} vulnerability(-ies)")
     print(f"    {cred_count} credential issue(s)")
-    print(f"[*] Done.")
+
+
+def main():
+    print("\n[*] PENSTATION — LAN Scanner & Vulnerability Checker")
+    print(f"[*] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+    interfaces = get_interfaces()
+    if not interfaces:
+        print("[!] No active network interfaces found.")
+        sys.exit(1)
+
+    print(f"[*] Active interfaces:")
+    for iface in interfaces:
+        print(f"    - {iface['name']}: {iface['ip']}/{iface['prefix']}")
+
+    local_ips = {iface["ip"] for iface in interfaces}
+    local_ip = interfaces[0]["ip"]
+
+    # non-interactive mode
+    if "--scan" in sys.argv:
+        run_lan_scan(interfaces, local_ips, local_ip)
+        return
+
+    # interactive main menu
+    while True:
+        print(f"\n{'='*50}")
+        print(f" PENSTATION — Main Menu")
+        print(f"{'='*50}")
+        print(f"  1 = LAN scan + port scan + vuln check")
+        print(f"  2 = Wi-Fi monitor (nearby networks)")
+        print(f"  3 = Network watchdog (detect new devices)")
+        print(f"  4 = Traceroute (trace route to host)")
+        print(f"  5 = Manage known devices (watchdog whitelist)")
+        print(f"  q = quit")
+        print(f"{'='*50}")
+
+        choice = input("\n  > ").strip().lower()
+
+        if choice == "q":
+            print("[*] Bye.")
+            break
+        elif choice == "1":
+            run_lan_scan(interfaces, local_ips, local_ip)
+        elif choice == "2":
+            interactive_wifi_scan()
+        elif choice == "3":
+            print("\n[?] Scan interval in seconds (default 30):")
+            interval = input("    > ").strip()
+            try:
+                interval = int(interval) if interval else 30
+            except ValueError:
+                interval = 30
+            run_watchdog(interval)
+        elif choice == "4":
+            interactive_traceroute()
+        elif choice == "5":
+            manage_known_devices()
+        else:
+            print("[!] Invalid option")
 
 
 if __name__ == "__main__":

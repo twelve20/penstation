@@ -131,39 +131,65 @@ def merge_devices(all_devices):
 
 def scan_ports(ip, mode="quick"):
     """
-    Scan ports on a target IP using nmap.
+    Two-pass scan:
+      Pass 1: fast SYN scan (-sS) to find open ports
+      Pass 2: version detection (-sV) only on open ports
     Modes:
-      quick  — top 100 ports, service version detection
-      full   — all 65535 ports (slow!)
-      vuln   — top 1000 ports + version detection + vuln scripts
+      quick  — top 100 ports
+      full   — all 65535 ports
+      vuln   — top 1000 ports + vulnerability scripts
     """
     ports = []
 
-    # -Pn: skip host discovery (treat as online — fixes routers that drop pings)
-    # --host-timeout: give up on a single host after this time
-    # --max-retries=2: don't retry too many times on filtered ports
-    base = ["nmap", "-Pn", "-sV", "-T4", "--max-retries=2",
-            "--host-timeout", "180s"]
-
+    # Pass 1: fast SYN scan to find open ports
     if mode == "quick":
-        cmd = base + ["--top-ports", "100", "-oX", "-", ip]
-        timeout = 200
+        discovery_cmd = ["nmap", "-Pn", "-sS", "-T4", "--max-retries=2",
+                         "--top-ports", "100", "-oX", "-", ip]
+        timeout1 = 60
     elif mode == "full":
-        cmd = base + ["-p-", "--host-timeout", "600s", "-oX", "-", ip]
-        timeout = 660
-    elif mode == "vuln":
-        cmd = base + ["--top-ports", "1000",
-                      "--script", "vulners,vuln",
-                      "--host-timeout", "300s",
-                      "-oX", "-", ip]
-        timeout = 360
-    else:
-        cmd = base + ["--top-ports", "100", "-oX", "-", ip]
-        timeout = 200
+        discovery_cmd = ["nmap", "-Pn", "-sS", "-T4", "--max-retries=2",
+                         "-p-", "-oX", "-", ip]
+        timeout1 = 300
+    else:  # vuln
+        discovery_cmd = ["nmap", "-Pn", "-sS", "-T4", "--max-retries=2",
+                         "--top-ports", "1000", "-oX", "-", ip]
+        timeout1 = 120
 
     try:
-        print(f"    nmap {mode} scan on {ip}...")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        print(f"    [{ip}] pass 1: finding open ports...")
+        result = subprocess.run(discovery_cmd, capture_output=True, text=True, timeout=timeout1)
+
+        # parse open ports from pass 1
+        open_ports = []
+        root = ET.fromstring(result.stdout)
+        for port_el in root.findall(".//port"):
+            state = port_el.find("state")
+            if state is not None and state.get("state") == "open":
+                open_ports.append(port_el.get("portid"))
+
+        if not open_ports:
+            print(f"    [{ip}] no open ports found")
+            return ports
+
+        port_list = ",".join(open_ports)
+        print(f"    [{ip}] found {len(open_ports)} open port(s): {port_list}")
+
+        # Pass 2: version detection only on open ports
+        version_cmd = ["nmap", "-Pn", "-sV", "-T4",
+                       "--version-intensity", "5",
+                       "-p", port_list, "-oX", "-", ip]
+        timeout2 = 120
+
+        if mode == "vuln":
+            version_cmd = ["nmap", "-Pn", "-sV", "-T4",
+                           "--version-intensity", "5",
+                           "-p", port_list,
+                           "--script", "vulners,vuln",
+                           "-oX", "-", ip]
+            timeout2 = 240
+
+        print(f"    [{ip}] pass 2: detecting services{' + vulns' if mode == 'vuln' else ''}...")
+        result = subprocess.run(version_cmd, capture_output=True, text=True, timeout=timeout2)
 
         root = ET.fromstring(result.stdout)
 

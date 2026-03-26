@@ -139,20 +139,27 @@ def scan_ports(ip, mode="quick"):
     """
     ports = []
 
+    # -Pn: skip host discovery (treat as online — fixes routers that drop pings)
+    # --host-timeout: give up on a single host after this time
+    # --max-retries=2: don't retry too many times on filtered ports
+    base = ["nmap", "-Pn", "-sV", "-T4", "--max-retries=2",
+            "--host-timeout", "180s"]
+
     if mode == "quick":
-        cmd = ["nmap", "-sV", "-T4", "--top-ports", "100", "-oX", "-", ip]
-        timeout = 120
+        cmd = base + ["--top-ports", "100", "-oX", "-", ip]
+        timeout = 200
     elif mode == "full":
-        cmd = ["nmap", "-sV", "-T4", "-p-", "-oX", "-", ip]
-        timeout = 600
+        cmd = base + ["-p-", "--host-timeout", "600s", "-oX", "-", ip]
+        timeout = 660
     elif mode == "vuln":
-        cmd = ["nmap", "-sV", "-T4", "--top-ports", "1000",
-               "--script", "vulners,vuln",
-               "-oX", "-", ip]
-        timeout = 300
+        cmd = base + ["--top-ports", "1000",
+                      "--script", "vulners,vuln",
+                      "--host-timeout", "300s",
+                      "-oX", "-", ip]
+        timeout = 360
     else:
-        cmd = ["nmap", "-sV", "-T4", "--top-ports", "100", "-oX", "-", ip]
-        timeout = 120
+        cmd = base + ["--top-ports", "100", "-oX", "-", ip]
+        timeout = 200
 
     try:
         print(f"    nmap {mode} scan on {ip}...")

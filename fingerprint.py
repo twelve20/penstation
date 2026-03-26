@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Device fingerprinting — identify device type by MAC OUI, open ports, banners."""
+"""Device fingerprinting — identify device type and OS by MAC, ports, banners, nmap OS detection."""
+
+import subprocess
+import re
+import xml.etree.ElementTree as ET
 
 
 # ──────────────────────────────────────────────────────────────
@@ -185,6 +189,159 @@ def classify_by_hostname(hostname):
 
 
 # ──────────────────────────────────────────────────────────────
+# OS detection
+# ──────────────────────────────────────────────────────────────
+
+def detect_os_nmap(ip):
+    """
+    Run nmap OS detection (-O) on a target.
+    Returns dict with os_name, os_family, os_accuracy, os_vendor.
+    Requires root.
+    """
+    try:
+        result = subprocess.run(
+            ["nmap", "-Pn", "-O", "--osscan-limit", "--max-os-tries=1",
+             "-T4", "-oX", "-", ip],
+            capture_output=True, text=True, timeout=60
+        )
+        root = ET.fromstring(result.stdout)
+
+        best_match = None
+        best_accuracy = 0
+
+        for osmatch in root.findall(".//osmatch"):
+            accuracy = int(osmatch.get("accuracy", "0"))
+            if accuracy > best_accuracy:
+                best_accuracy = accuracy
+                name = osmatch.get("name", "")
+
+                # get OS class info
+                osclass = osmatch.find("osclass")
+                family = ""
+                vendor = ""
+                osgen = ""
+                if osclass is not None:
+                    family = osclass.get("osfamily", "")
+                    vendor = osclass.get("vendor", "")
+                    osgen = osclass.get("osgen", "")
+
+                best_match = {
+                    "os_name": name,
+                    "os_family": family,
+                    "os_vendor": vendor,
+                    "os_gen": osgen,
+                    "os_accuracy": accuracy,
+                }
+
+        return best_match or {}
+
+    except (subprocess.TimeoutExpired, ET.ParseError, FileNotFoundError):
+        return {}
+
+
+def guess_os_from_banners(open_ports):
+    """
+    Guess OS from service version banners (no extra scan needed).
+    Works even when nmap -O can't determine the OS.
+    """
+    if not open_ports:
+        return None
+
+    all_versions = " ".join(
+        f"{p.get('service', '')} {p.get('version', '')}" for p in open_ports
+    ).lower()
+
+    # Windows indicators
+    if any(kw in all_versions for kw in [
+        "microsoft", "windows", "iis", "ms-wbt", "msrpc",
+        "ssdp/upnp", "httpapi"
+    ]):
+        # try to extract Windows version
+        match = re.search(r"windows\s+([\w\s.]+?)(?:\s|$|;)", all_versions)
+        if match:
+            return {"os_family": "Windows", "os_name": f"Windows {match.group(1).strip()}",
+                    "os_accuracy": 70, "source": "banner"}
+        return {"os_family": "Windows", "os_name": "Windows",
+                "os_accuracy": 60, "source": "banner"}
+
+    # Linux indicators
+    if any(kw in all_versions for kw in [
+        "ubuntu", "debian", "centos", "fedora", "red hat", "arch",
+        "openssh", "apache", "nginx"
+    ]):
+        distro = "Linux"
+        for d in ["ubuntu", "debian", "centos", "fedora", "red hat", "arch", "kali"]:
+            if d in all_versions:
+                distro = d.capitalize()
+                break
+        # try to get version from OpenSSH
+        ssh_match = re.search(r"openssh[_ ]([\d.]+p?\d*)\s*(ubuntu|debian)?", all_versions)
+        if ssh_match:
+            detail = ssh_match.group(2) or ""
+            if detail:
+                distro = detail.capitalize()
+        return {"os_family": "Linux", "os_name": f"Linux ({distro})",
+                "os_accuracy": 50, "source": "banner"}
+
+    # macOS
+    if any(kw in all_versions for kw in ["macos", "darwin", "apple"]):
+        return {"os_family": "macOS", "os_name": "macOS",
+                "os_accuracy": 50, "source": "banner"}
+
+    # Keenetic / router firmware
+    if "keeneticos" in all_versions:
+        match = re.search(r"keeneticos\s+version\s+([\d.]+)", all_versions)
+        ver = match.group(1) if match else ""
+        return {"os_family": "KeeneticOS", "os_name": f"KeeneticOS {ver}".strip(),
+                "os_accuracy": 90, "source": "banner"}
+
+    # MikroTik
+    if "routeros" in all_versions or "mikrotik" in all_versions:
+        return {"os_family": "RouterOS", "os_name": "MikroTik RouterOS",
+                "os_accuracy": 80, "source": "banner"}
+
+    # Android (rare, but sometimes mDNS or DLNA leaks)
+    if "android" in all_versions:
+        return {"os_family": "Android", "os_name": "Android",
+                "os_accuracy": 60, "source": "banner"}
+
+    # iOS
+    if "airplay" in all_versions or "apple mobile" in all_versions:
+        return {"os_family": "iOS", "os_name": "iOS/iPadOS",
+                "os_accuracy": 50, "source": "banner"}
+
+    # FreeBSD
+    if "freebsd" in all_versions:
+        return {"os_family": "FreeBSD", "os_name": "FreeBSD",
+                "os_accuracy": 60, "source": "banner"}
+
+    return None
+
+
+def guess_os_from_ports(open_ports):
+    """
+    Last resort: guess OS family from port patterns.
+    Low confidence but better than nothing.
+    """
+    if not open_ports:
+        return None
+
+    port_nums = {p["port"] for p in open_ports}
+
+    # strong Windows indicators
+    if port_nums & {135, 139, 445, 3389, 5357}:
+        return {"os_family": "Windows", "os_name": "Windows (port pattern)",
+                "os_accuracy": 40, "source": "ports"}
+
+    # SSH without Windows ports = probably Linux
+    if 22 in port_nums and not (port_nums & {135, 445, 3389}):
+        return {"os_family": "Linux", "os_name": "Linux (has SSH)",
+                "os_accuracy": 30, "source": "ports"}
+
+    return None
+
+
+# ──────────────────────────────────────────────────────────────
 # Main fingerprint function
 # ──────────────────────────────────────────────────────────────
 
@@ -303,3 +460,46 @@ def fingerprint_device(device, open_ports=None):
         "confidence": "low",
         "reason": "no identifying features",
     }
+
+
+def detect_os(ip, open_ports=None, use_nmap_os=True):
+    """
+    Combined OS detection using multiple methods.
+    Priority: nmap -O > banner analysis > port guessing.
+
+    Args:
+        ip: target IP
+        open_ports: list of port dicts (from scan_ports)
+        use_nmap_os: whether to run nmap -O (requires root, slower)
+
+    Returns:
+        dict with os_name, os_family, os_accuracy, source
+    """
+    # 1. Try banner analysis first (free — uses existing scan data)
+    banner_os = guess_os_from_banners(open_ports)
+
+    # 2. If banner gave high confidence or nmap -O disabled, use that
+    if banner_os and banner_os["os_accuracy"] >= 80:
+        return banner_os
+
+    # 3. Try nmap -O (accurate but slow)
+    nmap_os = {}
+    if use_nmap_os:
+        nmap_os = detect_os_nmap(ip)
+        if nmap_os and nmap_os.get("os_accuracy", 0) > 0:
+            nmap_os["source"] = "nmap -O"
+            # if nmap is more confident, use it
+            if not banner_os or nmap_os["os_accuracy"] > banner_os["os_accuracy"]:
+                return nmap_os
+
+    # 4. Banner result (medium confidence)
+    if banner_os:
+        return banner_os
+
+    # 5. Port-based guess (low confidence)
+    port_os = guess_os_from_ports(open_ports)
+    if port_os:
+        return port_os
+
+    return {"os_name": "Unknown", "os_family": "Unknown",
+            "os_accuracy": 0, "source": "none"}

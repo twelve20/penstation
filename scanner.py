@@ -12,7 +12,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 from brute import check_default_creds, print_cred_results
-from fingerprint import fingerprint_device
+from fingerprint import fingerprint_device, detect_os
 
 print_lock = Lock()
 
@@ -270,7 +270,7 @@ def scan_ports(ip, mode="quick"):
 
 
 def scan_single_target(ip, scan_mode, check_creds, device_info=None):
-    """Scan one target (ports + vulns + creds + fingerprint). Used for parallel execution."""
+    """Scan one target (ports + vulns + OS + creds + fingerprint). Used for parallel execution."""
     ports = scan_ports(ip, scan_mode)
 
     # update fingerprint with port data
@@ -278,6 +278,14 @@ def scan_single_target(ip, scan_mode, check_creds, device_info=None):
     if device_info:
         fp = fingerprint_device(device_info, ports)
         tprint(f"    [{ip}] identified as: {fp['label']} ({fp['confidence']})")
+
+    # OS detection (use nmap -O only if we have open ports to scan against)
+    os_info = {}
+    if ports:
+        tprint(f"    [{ip}] detecting OS...")
+        os_info = detect_os(ip, ports, use_nmap_os=True)
+        os_str = f"{os_info.get('os_name', '?')} ({os_info.get('os_accuracy', 0)}% via {os_info.get('source', '?')})"
+        tprint(f"    [{ip}] OS: {os_str}")
 
     cred_findings = []
     if ports:
@@ -290,7 +298,8 @@ def scan_single_target(ip, scan_mode, check_creds, device_info=None):
                 tprint(f"    [{ip}] checking telnet/ftp for default passwords...")
                 cred_findings = check_default_creds(ip, dangerous)
 
-    return {"ip": ip, "ports": ports, "credentials": cred_findings, "fingerprint": fp}
+    return {"ip": ip, "ports": ports, "credentials": cred_findings,
+            "fingerprint": fp, "os": os_info}
 
 
 # ──────────────────────────────────────────────────────────────
@@ -327,16 +336,40 @@ def print_devices(devices, local_ip=None):
     return devices
 
 
-def print_ports(ip, ports):
+def print_scan_result(result):
+    """Print full scan result for a target (ports + OS + creds)."""
+    ip = result["ip"]
+    ports = result["ports"]
+    os_info = result.get("os", {})
+    fp = result.get("fingerprint", {})
+
     if not ports:
         print(f"\n[*] No open ports found on {ip}")
         return
 
+    device_label = fp.get("label", "")
+    os_name = os_info.get("os_name", "Unknown")
+    os_acc = os_info.get("os_accuracy", 0)
+
     has_vulns = any(p["vulns"] for p in ports)
 
     print(f"\n{'='*74}")
-    print(f" Open ports on {ip}")
+    header = f" {ip}"
+    if device_label:
+        header += f" — {device_label}"
+    if os_name != "Unknown":
+        header += f" — {os_name} ({os_acc}%)"
+    print(header)
     print(f"{'='*74}")
+
+    print_ports_table(ports, has_vulns)
+
+    if result.get("credentials"):
+        print_cred_results(ip, result["credentials"])
+
+
+def print_ports_table(ports, has_vulns=False):
+    """Print port table (used by print_scan_result)."""
     print(f" {'Port':<10}{'Service':<16}{'Version'}")
     print(f" {'-'*7:<10}{'-'*14:<16}{'-'*40}")
 
@@ -486,17 +519,13 @@ def main():
             for future in as_completed(futures):
                 result = future.result()
                 with print_lock:
-                    print_ports(result["ip"], result["ports"])
-                    if result["credentials"]:
-                        print_cred_results(result["ip"], result["credentials"])
+                    print_scan_result(result)
                 all_results["targets"].append(result)
     else:
         for ip in targets:
             result = scan_single_target(ip, scan_mode, check_creds,
                                         device_map.get(ip))
-            print_ports(result["ip"], result["ports"])
-            if result["credentials"]:
-                print_cred_results(result["ip"], result["credentials"])
+            print_scan_result(result)
             all_results["targets"].append(result)
 
     elapsed = time.time() - start_time

@@ -54,13 +54,13 @@ print(" PENSTATION self-test")
 print("="*60)
 
 # ── 1. Python version ──
-print("\n[1/8] Python")
+print("\n[1/9] Python")
 v = sys.version_info
 check(f"Python {v.major}.{v.minor}.{v.micro}", v.major == 3 and v.minor >= 6,
       "Need Python 3.6+" if v.major != 3 or v.minor < 6 else "")
 
 # ── 2. Required system tools ──
-print("\n[2/8] System tools")
+print("\n[2/9] System tools")
 
 tools = {
     "nmap": ["nmap", "--version"],
@@ -86,13 +86,13 @@ for name, cmd in optional_tools.items():
         warn(f"{name} not installed (optional)", f"Install: sudo apt install {name}")
 
 # ── 3. Root privileges ──
-print("\n[3/8] Privileges")
+print("\n[3/9] Privileges")
 is_root = os.geteuid() == 0
 check("Running as root", is_root,
       "Run with sudo for ARP scanning" if not is_root else "")
 
 # ── 4. Network interfaces ──
-print("\n[4/8] Network")
+print("\n[4/9] Network")
 
 try:
     from scanner import get_interfaces, get_subnet
@@ -116,7 +116,7 @@ except Exception as e:
     check("Network reachable", False, str(e))
 
 # ── 5. Module imports ──
-print("\n[5/8] Modules")
+print("\n[5/9] Modules")
 
 modules_to_test = [
     ("scanner", "get_interfaces"),
@@ -137,6 +137,10 @@ modules_to_test = [
     ("fingerprint", "classify_by_mac"),
     ("fingerprint", "classify_by_ports"),
     ("fingerprint", "classify_by_hostname"),
+    ("fingerprint", "detect_os"),
+    ("fingerprint", "detect_os_nmap"),
+    ("fingerprint", "guess_os_from_banners"),
+    ("fingerprint", "guess_os_from_ports"),
 ]
 
 for mod_name, func_name in modules_to_test:
@@ -150,7 +154,7 @@ for mod_name, func_name in modules_to_test:
         check(f"{mod_name}.{func_name}", False, "Function not found")
 
 # ── 6. ARP scan test ──
-print("\n[6/8] ARP scan (live test)")
+print("\n[6/9] ARP scan (live test)")
 
 if is_root and interfaces:
     try:
@@ -172,7 +176,7 @@ else:
     warn("ARP scan skipped", "Need root + active interface")
 
 # ── 7. Nmap port scan test (scan localhost) ──
-print("\n[7/8] Nmap port scan (localhost test)")
+print("\n[7/9] Nmap port scan (localhost test)")
 
 if is_root:
     try:
@@ -236,7 +240,7 @@ except Exception as e:
     check("Default creds database", False, str(e))
 
 # fingerprint module tests
-print("\n[8/8] Device fingerprinting")
+print("\n[8/9] Device fingerprinting")
 try:
     from fingerprint import fingerprint_device, classify_by_mac, classify_by_ports
 
@@ -284,6 +288,47 @@ try:
 
 except Exception as e:
     check("Fingerprint module", False, str(e))
+
+# OS detection tests (banner-based, no network needed)
+print("\n[9/9] OS detection")
+try:
+    from fingerprint import guess_os_from_banners, guess_os_from_ports, detect_os
+
+    # Windows from banner
+    win_ports = [{"port": 5357, "service": "http", "version": "Microsoft HTTPAPI httpd 2.0 SSDP/UPnP"}]
+    os_info = guess_os_from_banners(win_ports)
+    check(f"Banner 'Microsoft HTTPAPI' → {os_info['os_family']}",
+          os_info and os_info["os_family"] == "Windows")
+
+    # Linux from banner
+    linux_ports = [{"port": 22, "service": "ssh", "version": "OpenSSH 8.9 Ubuntu"}]
+    os_info = guess_os_from_banners(linux_ports)
+    check(f"Banner 'OpenSSH Ubuntu' → {os_info['os_family']}",
+          os_info and os_info["os_family"] == "Linux")
+
+    # KeeneticOS from banner
+    keen_ports = [{"port": 23, "service": "telnet", "version": "KeeneticOS version 4.03"}]
+    os_info = guess_os_from_banners(keen_ports)
+    check(f"Banner 'KeeneticOS' → {os_info['os_family']}",
+          os_info and os_info["os_family"] == "KeeneticOS")
+
+    # Windows from ports
+    os_info = guess_os_from_ports([{"port": 445, "service": "microsoft-ds", "version": ""}])
+    check(f"Port 445 → {os_info['os_family']}",
+          os_info and os_info["os_family"] == "Windows")
+
+    # Linux from ports
+    os_info = guess_os_from_ports([{"port": 22, "service": "ssh", "version": ""}])
+    check(f"Port 22 only → {os_info['os_family']}",
+          os_info and os_info["os_family"] == "Linux")
+
+    # detect_os without nmap -O (banner only)
+    os_info = detect_os("127.0.0.1", win_ports, use_nmap_os=False)
+    check(f"detect_os(nmap=off) → {os_info['os_family']}",
+          os_info["os_family"] == "Windows")
+
+except Exception as e:
+    check("OS detection", False, str(e))
 
 
 # ──────────────────────────────────────────────────────────────

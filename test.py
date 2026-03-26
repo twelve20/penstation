@@ -54,13 +54,13 @@ print(" PENSTATION self-test")
 print("="*60)
 
 # ── 1. Python version ──
-print("\n[1/7] Python")
+print("\n[1/8] Python")
 v = sys.version_info
 check(f"Python {v.major}.{v.minor}.{v.micro}", v.major == 3 and v.minor >= 6,
       "Need Python 3.6+" if v.major != 3 or v.minor < 6 else "")
 
 # ── 2. Required system tools ──
-print("\n[2/7] System tools")
+print("\n[2/8] System tools")
 
 tools = {
     "nmap": ["nmap", "--version"],
@@ -86,13 +86,13 @@ for name, cmd in optional_tools.items():
         warn(f"{name} not installed (optional)", f"Install: sudo apt install {name}")
 
 # ── 3. Root privileges ──
-print("\n[3/7] Privileges")
+print("\n[3/8] Privileges")
 is_root = os.geteuid() == 0
 check("Running as root", is_root,
       "Run with sudo for ARP scanning" if not is_root else "")
 
 # ── 4. Network interfaces ──
-print("\n[4/7] Network")
+print("\n[4/8] Network")
 
 try:
     from scanner import get_interfaces, get_subnet
@@ -116,7 +116,7 @@ except Exception as e:
     check("Network reachable", False, str(e))
 
 # ── 5. Module imports ──
-print("\n[5/7] Modules")
+print("\n[5/8] Modules")
 
 modules_to_test = [
     ("scanner", "get_interfaces"),
@@ -133,6 +133,10 @@ modules_to_test = [
     ("brute", "check_http"),
     ("brute", "print_cred_results"),
     ("brute", "DEFAULT_CREDS"),
+    ("fingerprint", "fingerprint_device"),
+    ("fingerprint", "classify_by_mac"),
+    ("fingerprint", "classify_by_ports"),
+    ("fingerprint", "classify_by_hostname"),
 ]
 
 for mod_name, func_name in modules_to_test:
@@ -146,7 +150,7 @@ for mod_name, func_name in modules_to_test:
         check(f"{mod_name}.{func_name}", False, "Function not found")
 
 # ── 6. ARP scan test ──
-print("\n[6/7] ARP scan (live test)")
+print("\n[6/8] ARP scan (live test)")
 
 if is_root and interfaces:
     try:
@@ -168,7 +172,7 @@ else:
     warn("ARP scan skipped", "Need root + active interface")
 
 # ── 7. Nmap port scan test (scan localhost) ──
-print("\n[7/7] Nmap port scan (localhost test)")
+print("\n[7/8] Nmap port scan (localhost test)")
 
 if is_root:
     try:
@@ -230,6 +234,56 @@ try:
               len(DEFAULT_CREDS[svc]) > 0)
 except Exception as e:
     check("Default creds database", False, str(e))
+
+# fingerprint module tests
+print("\n[8/8] Device fingerprinting")
+try:
+    from fingerprint import fingerprint_device, classify_by_mac, classify_by_ports
+
+    # test router by vendor
+    fp = fingerprint_device({"ip": "192.168.1.1", "mac": "50:ff:20:30:59:71",
+                             "vendor": "Keenetic Limited", "hostname": ""})
+    check(f"Keenetic → {fp['type']}", fp["type"] == "router")
+
+    # test PC by vendor
+    fp = fingerprint_device({"ip": "192.168.1.36", "mac": "00:d8:61:bb:ba:61",
+                             "vendor": "Micro-Star INTL CO., LTD.", "hostname": ""})
+    check(f"Micro-Star → {fp['type']}", fp["type"] == "pc")
+
+    # test phone by randomized MAC
+    fp = fingerprint_device({"ip": "192.168.1.39", "mac": "8a:69:d1:fa:e2:46",
+                             "vendor": "(Unknown: locally administered)", "hostname": ""})
+    check(f"Random MAC → {fp['type']}", fp["type"] == "phone")
+
+    # test router by ports (DNS + HTTP + telnet)
+    router_ports = [
+        {"port": 23, "service": "telnet", "version": ""},
+        {"port": 53, "service": "domain", "version": ""},
+        {"port": 80, "service": "http", "version": ""},
+        {"port": 443, "service": "https", "version": ""},
+    ]
+    fp = fingerprint_device({"ip": "10.0.0.1", "mac": "aa:bb:cc:dd:ee:ff",
+                             "vendor": "", "hostname": ""}, router_ports)
+    check(f"Ports 23+53+80+443 → {fp['type']}", fp["type"] == "router")
+
+    # test PC by Windows port
+    pc_ports = [{"port": 5357, "service": "http", "version": "Microsoft HTTPAPI"}]
+    fp = fingerprint_device({"ip": "10.0.0.2", "mac": "aa:bb:cc:dd:ee:ff",
+                             "vendor": "", "hostname": ""}, pc_ports)
+    check(f"Port 5357 Microsoft → {fp['type']}", fp["type"] == "pc")
+
+    # test hostname classification
+    fp = fingerprint_device({"ip": "10.0.0.3", "mac": "aa:bb:cc:dd:ee:ff",
+                             "vendor": "", "hostname": "iPhone-de-Juan"})
+    check(f"Hostname 'iPhone-de-Juan' → {fp['type']}", fp["type"] == "phone")
+
+    # test Raspberry Pi
+    fp = fingerprint_device({"ip": "10.0.0.4", "mac": "b8:27:eb:fd:b9:15",
+                             "vendor": "Raspberry Pi Foundation", "hostname": ""})
+    check(f"Raspberry Pi → {fp['type']}", fp["type"] == "sbc")
+
+except Exception as e:
+    check("Fingerprint module", False, str(e))
 
 
 # ──────────────────────────────────────────────────────────────

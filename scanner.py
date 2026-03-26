@@ -12,6 +12,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 from brute import check_default_creds, print_cred_results
+from fingerprint import fingerprint_device
 
 print_lock = Lock()
 
@@ -268,9 +269,15 @@ def scan_ports(ip, mode="quick"):
     return []
 
 
-def scan_single_target(ip, scan_mode, check_creds):
-    """Scan one target (ports + vulns + creds). Used for parallel execution."""
+def scan_single_target(ip, scan_mode, check_creds, device_info=None):
+    """Scan one target (ports + vulns + creds + fingerprint). Used for parallel execution."""
     ports = scan_ports(ip, scan_mode)
+
+    # update fingerprint with port data
+    fp = {}
+    if device_info:
+        fp = fingerprint_device(device_info, ports)
+        tprint(f"    [{ip}] identified as: {fp['label']} ({fp['confidence']})")
 
     cred_findings = []
     if ports:
@@ -283,7 +290,7 @@ def scan_single_target(ip, scan_mode, check_creds):
                 tprint(f"    [{ip}] checking telnet/ftp for default passwords...")
                 cred_findings = check_default_creds(ip, dangerous)
 
-    return {"ip": ip, "ports": ports, "credentials": cred_findings}
+    return {"ip": ip, "ports": ports, "credentials": cred_findings, "fingerprint": fp}
 
 
 # ──────────────────────────────────────────────────────────────
@@ -297,21 +304,26 @@ def print_devices(devices, local_ip=None):
 
     for d in devices:
         d["hostname"] = resolve_hostname(d["ip"])
+        fp = fingerprint_device(d)
+        d["device_type"] = fp["type"]
+        d["device_label"] = fp["label"]
+        d["device_icon"] = fp["icon"]
+        d["fp_confidence"] = fp["confidence"]
 
     devices.sort(key=lambda d: tuple(int(p) for p in d["ip"].split(".")))
 
-    print(f"\n{'='*74}")
+    print(f"\n{'='*80}")
     print(f" Found {len(devices)} device(s) on the local network")
-    print(f"{'='*74}")
-    print(f" {'#':<4}{'IP Address':<18}{'MAC Address':<20}{'Vendor/Hostname'}")
-    print(f" {'-'*2:<4}{'-'*16:<18}{'-'*17:<20}{'-'*33}")
+    print(f"{'='*80}")
+    print(f" {'#':<4}{'Type':<7}{'IP Address':<18}{'MAC Address':<20}{'Identity'}")
+    print(f" {'-'*2:<4}{'-'*5:<7}{'-'*16:<18}{'-'*17:<20}{'-'*25}")
 
     for i, d in enumerate(devices, 1):
         name = d["hostname"] or d["vendor"] or "Unknown"
         marker = " <-- you" if d["ip"] == local_ip else ""
-        print(f" {i:<4}{d['ip']:<18}{d['mac']:<20}{name}{marker}")
+        print(f" {i:<4}{d['device_icon']:<7}{d['ip']:<18}{d['mac']:<20}{name}{marker}")
 
-    print(f"{'='*74}")
+    print(f"{'='*80}")
     return devices
 
 
@@ -448,6 +460,9 @@ def main():
     check_creds = mode == "vuln+creds"
     scan_mode = "vuln" if check_creds else mode
 
+    # build ip → device lookup for fingerprinting
+    device_map = {d["ip"]: d for d in sorted_devices}
+
     start_time = time.time()
     print(f"\n[*] Starting {mode} scan on {len(targets)} target(s)...\n")
 
@@ -459,27 +474,26 @@ def main():
 
     # parallel scanning: each target in its own thread
     if len(targets) > 1:
-        # limit workers on RPi (4 cores, limited RAM)
         max_workers = min(len(targets), 3)
         print(f"[*] Scanning {len(targets)} targets in parallel ({max_workers} workers)\n")
 
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {
-                pool.submit(scan_single_target, ip, scan_mode, check_creds): ip
+                pool.submit(scan_single_target, ip, scan_mode, check_creds,
+                            device_map.get(ip)): ip
                 for ip in targets
             }
             for future in as_completed(futures):
                 result = future.result()
-                # print results sequentially for readability
                 with print_lock:
                     print_ports(result["ip"], result["ports"])
                     if result["credentials"]:
                         print_cred_results(result["ip"], result["credentials"])
                 all_results["targets"].append(result)
     else:
-        # single target, no threading overhead
         for ip in targets:
-            result = scan_single_target(ip, scan_mode, check_creds)
+            result = scan_single_target(ip, scan_mode, check_creds,
+                                        device_map.get(ip))
             print_ports(result["ip"], result["ports"])
             if result["credentials"]:
                 print_cred_results(result["ip"], result["credentials"])

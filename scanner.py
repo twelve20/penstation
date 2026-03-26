@@ -9,7 +9,17 @@ import socket
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 from brute import check_default_creds, print_cred_results
+
+print_lock = Lock()
+
+
+def tprint(*args, **kwargs):
+    """Thread-safe print."""
+    with print_lock:
+        print(*args, **kwargs)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -17,7 +27,6 @@ from brute import check_default_creds, print_cred_results
 # ──────────────────────────────────────────────────────────────
 
 def get_interfaces():
-    """Get all active network interfaces with their IPs."""
     interfaces = []
     try:
         result = subprocess.run(
@@ -46,7 +55,6 @@ def get_subnet(ip, prefix=24):
 
 
 def scan_arp(interface=None):
-    """ARP scan using arp-scan."""
     devices = []
     try:
         cmd = ["arp-scan", "--localnet", "--retry=3", "--timeout=1000"]
@@ -71,7 +79,6 @@ def scan_arp(interface=None):
 
 
 def scan_nmap_ping(subnet):
-    """Ping scan using nmap (fallback)."""
     devices = []
     try:
         result = subprocess.run(
@@ -127,22 +134,82 @@ def merge_devices(all_devices):
 
 
 # ──────────────────────────────────────────────────────────────
-# Port scanning + service detection
+# Port scanning + service detection (optimized)
 # ──────────────────────────────────────────────────────────────
+
+def parse_nmap_ports(xml_output):
+    """Parse open ports from nmap XML output."""
+    ports = []
+    root = ET.fromstring(xml_output)
+    for port_el in root.findall(".//port"):
+        state = port_el.find("state")
+        if state is not None and state.get("state") == "open":
+            ports.append(port_el.get("portid"))
+    return ports
+
+
+def parse_nmap_services(xml_output, vuln_results=None):
+    """Parse services and versions from nmap XML output."""
+    if vuln_results is None:
+        vuln_results = {}
+    ports = []
+    root = ET.fromstring(xml_output)
+    for host in root.findall(".//host"):
+        for port_el in host.findall(".//port"):
+            state = port_el.find("state")
+            if state is None or state.get("state") != "open":
+                continue
+            port_id = port_el.get("portid")
+            protocol = port_el.get("protocol", "tcp")
+            service_el = port_el.find("service")
+            service_name = ""
+            service_version = ""
+            if service_el is not None:
+                service_name = service_el.get("name", "")
+                product = service_el.get("product", "")
+                version = service_el.get("version", "")
+                extra = service_el.get("extrainfo", "")
+                service_version = " ".join(filter(None, [product, version, extra]))
+            vulns = vuln_results.get(port_id, [])
+            ports.append({
+                "port": int(port_id),
+                "protocol": protocol,
+                "service": service_name,
+                "version": service_version,
+                "vulns": vulns,
+            })
+    return ports
+
+
+def scan_vuln_port(ip, port):
+    """Scan a single port for vulns (used in parallel)."""
+    try:
+        vuln_cmd = ["nmap", "-Pn", "-sV", "-T4",
+                    "-p", port,
+                    "--script", "vulners",
+                    "-oX", "-", ip]
+        vresult = subprocess.run(vuln_cmd, capture_output=True, text=True, timeout=90)
+        vroot = ET.fromstring(vresult.stdout)
+        vulns = []
+        for port_el in vroot.findall(".//port"):
+            for script in port_el.findall(".//script"):
+                script_id = script.get("id", "")
+                output = script.get("output", "").strip()
+                if output:
+                    vulns.append({"script": script_id, "output": output})
+        return port, vulns
+    except (subprocess.TimeoutExpired, ET.ParseError):
+        return port, []
+
 
 def scan_ports(ip, mode="quick"):
     """
-    Two-pass scan:
+    Multi-pass scan:
       Pass 1: fast SYN scan (-sS) to find open ports
       Pass 2: version detection (-sV) only on open ports
-    Modes:
-      quick  — top 100 ports
-      full   — all 65535 ports
-      vuln   — top 1000 ports + vulnerability scripts
+      Pass 3: vuln scripts in parallel (vuln mode only)
     """
-    ports = []
-
-    # Pass 1: fast SYN scan to find open ports
+    # Pass 1: fast SYN scan
     if mode == "quick":
         discovery_cmd = ["nmap", "-Pn", "-sS", "-T4", "--max-retries=2",
                          "--top-ports", "100", "-oX", "-", ip]
@@ -157,98 +224,66 @@ def scan_ports(ip, mode="quick"):
         timeout1 = 120
 
     try:
-        print(f"    [{ip}] pass 1: finding open ports...")
+        tprint(f"    [{ip}] pass 1: finding open ports...")
         result = subprocess.run(discovery_cmd, capture_output=True, text=True, timeout=timeout1)
-
-        # parse open ports from pass 1
-        open_ports = []
-        root = ET.fromstring(result.stdout)
-        for port_el in root.findall(".//port"):
-            state = port_el.find("state")
-            if state is not None and state.get("state") == "open":
-                open_ports.append(port_el.get("portid"))
+        open_ports = parse_nmap_ports(result.stdout)
 
         if not open_ports:
-            print(f"    [{ip}] no open ports found")
-            return ports
+            tprint(f"    [{ip}] no open ports found")
+            return []
 
         port_list = ",".join(open_ports)
-        print(f"    [{ip}] found {len(open_ports)} open port(s): {port_list}")
+        tprint(f"    [{ip}] found {len(open_ports)} open port(s): {port_list}")
 
-        # Pass 2: version detection only on open ports
+        # Pass 2: version detection (lower intensity = faster)
+        intensity = "3" if mode == "quick" else "5"
         version_cmd = ["nmap", "-Pn", "-sV", "-T4",
-                       "--version-intensity", "5",
+                       "--version-intensity", intensity,
                        "-p", port_list, "-oX", "-", ip]
-        timeout2 = 180
 
-        print(f"    [{ip}] pass 2: detecting services...")
-        result = subprocess.run(version_cmd, capture_output=True, text=True, timeout=timeout2)
+        tprint(f"    [{ip}] pass 2: detecting services...")
+        result = subprocess.run(version_cmd, capture_output=True, text=True, timeout=180)
 
-        # Pass 3 (vuln mode only): run vuln scripts separately per port
-        vuln_results = {}  # port_id -> [vulns]
+        # Pass 3 (vuln mode): parallel vuln scanning
+        vuln_results = {}
         if mode == "vuln":
-            print(f"    [{ip}] pass 3: checking vulnerabilities...")
-            for p in open_ports:
-                try:
-                    print(f"      checking port {p}...")
-                    vuln_cmd = ["nmap", "-Pn", "-sV", "-T4",
-                                "-p", p,
-                                "--script", "vulners",
-                                "-oX", "-", ip]
-                    vresult = subprocess.run(vuln_cmd, capture_output=True, text=True, timeout=90)
-                    vroot = ET.fromstring(vresult.stdout)
-                    for port_el in vroot.findall(".//port"):
-                        for script in port_el.findall(".//script"):
-                            script_id = script.get("id", "")
-                            output = script.get("output", "").strip()
-                            if output:
-                                vuln_results.setdefault(p, []).append({
-                                    "script": script_id, "output": output
-                                })
-                except (subprocess.TimeoutExpired, ET.ParseError):
-                    print(f"      port {p} — timed out or failed, skipping")
-                    continue
+            tprint(f"    [{ip}] pass 3: checking vulns ({len(open_ports)} ports in parallel)...")
+            with ThreadPoolExecutor(max_workers=min(len(open_ports), 4)) as pool:
+                futures = {pool.submit(scan_vuln_port, ip, p): p for p in open_ports}
+                for future in as_completed(futures):
+                    port, vulns = future.result()
+                    if vulns:
+                        vuln_results[port] = vulns
+                        tprint(f"      port {port} — {len(vulns)} finding(s)")
 
-        root = ET.fromstring(result.stdout)
-
-        for host in root.findall(".//host"):
-            for port_el in host.findall(".//port"):
-                state = port_el.find("state")
-                if state is None or state.get("state") != "open":
-                    continue
-
-                port_id = port_el.get("portid")
-                protocol = port_el.get("protocol", "tcp")
-
-                service_el = port_el.find("service")
-                service_name = ""
-                service_version = ""
-                if service_el is not None:
-                    service_name = service_el.get("name", "")
-                    product = service_el.get("product", "")
-                    version = service_el.get("version", "")
-                    extra = service_el.get("extrainfo", "")
-                    service_version = " ".join(filter(None, [product, version, extra]))
-
-                # collect vulns from pass 3
-                vulns = vuln_results.get(port_id, [])
-
-                ports.append({
-                    "port": int(port_id),
-                    "protocol": protocol,
-                    "service": service_name,
-                    "version": service_version,
-                    "vulns": vulns,
-                })
+        return parse_nmap_services(result.stdout, vuln_results)
 
     except FileNotFoundError:
-        print("[!] nmap not found.")
+        tprint("[!] nmap not found.")
     except subprocess.TimeoutExpired:
-        print(f"[!] Port scan timed out for {ip}")
+        tprint(f"[!] Port scan timed out for {ip}")
     except ET.ParseError:
-        print(f"[!] Failed to parse nmap output for {ip}")
+        tprint(f"[!] Failed to parse nmap output for {ip}")
 
-    return ports
+    return []
+
+
+def scan_single_target(ip, scan_mode, check_creds):
+    """Scan one target (ports + vulns + creds). Used for parallel execution."""
+    ports = scan_ports(ip, scan_mode)
+
+    cred_findings = []
+    if ports:
+        if check_creds:
+            tprint(f"    [{ip}] checking default credentials...")
+            cred_findings = check_default_creds(ip, ports)
+        else:
+            dangerous = [p for p in ports if p["service"] in ("telnet", "ftp") or p["port"] in (23, 21)]
+            if dangerous:
+                tprint(f"    [{ip}] checking telnet/ftp for default passwords...")
+                cred_findings = check_default_creds(ip, dangerous)
+
+    return {"ip": ip, "ports": ports, "credentials": cred_findings}
 
 
 # ──────────────────────────────────────────────────────────────
@@ -320,7 +355,6 @@ def save_results(data, filename="scan_results.json"):
 # ──────────────────────────────────────────────────────────────
 
 def pick_targets(devices):
-    """Let user pick which devices to scan."""
     print("\n[?] Which targets to port-scan?")
     print("    a = all devices")
     print("    1,3,5 = specific device numbers")
@@ -344,7 +378,6 @@ def pick_targets(devices):
 
 
 def pick_scan_mode():
-    """Let user pick scan depth."""
     print("\n[?] Scan mode:")
     print("    1 = quick  (top 100 ports + service versions)")
     print("    2 = full   (all 65535 ports + versions — slow!)")
@@ -391,7 +424,6 @@ def main():
         all_devices = scan_nmap_ping(subnet)
 
     all_devices = merge_devices(all_devices)
-    # exclude our own IPs from targets
     all_devices = [d for d in all_devices if d["ip"] not in local_ips]
 
     sorted_devices = print_devices(all_devices, local_ip)
@@ -401,7 +433,6 @@ def main():
 
     # ── Phase 2: Port scan ──
     if "--scan" in sys.argv:
-        # non-interactive: scan all with quick mode
         targets = [d["ip"] for d in sorted_devices]
         mode = "quick"
         for i, arg in enumerate(sys.argv):
@@ -417,6 +448,7 @@ def main():
     check_creds = mode == "vuln+creds"
     scan_mode = "vuln" if check_creds else mode
 
+    start_time = time.time()
     print(f"\n[*] Starting {mode} scan on {len(targets)} target(s)...\n")
 
     all_results = {
@@ -425,31 +457,36 @@ def main():
         "targets": [],
     }
 
-    for ip in targets:
-        ports = scan_ports(ip, scan_mode)
-        print_ports(ip, ports)
+    # parallel scanning: each target in its own thread
+    if len(targets) > 1:
+        # limit workers on RPi (4 cores, limited RAM)
+        max_workers = min(len(targets), 3)
+        print(f"[*] Scanning {len(targets)} targets in parallel ({max_workers} workers)\n")
 
-        # Phase 3: default credential check
-        cred_findings = []
-        if check_creds and ports:
-            print(f"    [{ip}] checking default credentials...")
-            cred_findings = check_default_creds(ip, ports)
-            print_cred_results(ip, cred_findings)
-        elif ports:
-            # always check creds on dangerous services even without vuln+creds mode
-            dangerous = [p for p in ports if p["service"] in ("telnet", "ftp") or p["port"] in (23, 21)]
-            if dangerous:
-                print(f"    [{ip}] checking telnet/ftp for default passwords...")
-                cred_findings = check_default_creds(ip, dangerous)
-                print_cred_results(ip, cred_findings)
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {
+                pool.submit(scan_single_target, ip, scan_mode, check_creds): ip
+                for ip in targets
+            }
+            for future in as_completed(futures):
+                result = future.result()
+                # print results sequentially for readability
+                with print_lock:
+                    print_ports(result["ip"], result["ports"])
+                    if result["credentials"]:
+                        print_cred_results(result["ip"], result["credentials"])
+                all_results["targets"].append(result)
+    else:
+        # single target, no threading overhead
+        for ip in targets:
+            result = scan_single_target(ip, scan_mode, check_creds)
+            print_ports(result["ip"], result["ports"])
+            if result["credentials"]:
+                print_cred_results(result["ip"], result["credentials"])
+            all_results["targets"].append(result)
 
-        all_results["targets"].append({
-            "ip": ip,
-            "ports": ports,
-            "credentials": cred_findings,
-        })
+    elapsed = time.time() - start_time
 
-    # save if requested
     if "--save" in sys.argv or "-s" in sys.argv:
         save_results(all_results)
 
@@ -460,7 +497,7 @@ def main():
     )
     cred_count = sum(len(t["credentials"]) for t in all_results["targets"])
 
-    print(f"[*] Scan complete:")
+    print(f"[*] Scan complete in {elapsed:.1f}s:")
     print(f"    {open_count} open port(s)")
     print(f"    {vuln_count} vulnerability(-ies)")
     print(f"    {cred_count} credential issue(s)")

@@ -9,6 +9,7 @@ import socket
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime
+from brute import check_default_creds, print_cred_results
 
 
 # ──────────────────────────────────────────────────────────────
@@ -348,9 +349,10 @@ def pick_scan_mode():
     print("    1 = quick  (top 100 ports + service versions)")
     print("    2 = full   (all 65535 ports + versions — slow!)")
     print("    3 = vuln   (top 1000 ports + vulnerability scripts)")
+    print("    4 = vuln+creds (vuln scan + default password check)")
     choice = input("\n    > ").strip()
 
-    modes = {"1": "quick", "2": "full", "3": "vuln"}
+    modes = {"1": "quick", "2": "full", "3": "vuln", "4": "vuln+creds"}
     return modes.get(choice, "quick")
 
 
@@ -412,7 +414,10 @@ def main():
             return
         mode = pick_scan_mode()
 
-    print(f"\n[*] Starting {mode} port scan on {len(targets)} target(s)...\n")
+    check_creds = mode == "vuln+creds"
+    scan_mode = "vuln" if check_creds else mode
+
+    print(f"\n[*] Starting {mode} scan on {len(targets)} target(s)...\n")
 
     all_results = {
         "scan_time": datetime.now().isoformat(),
@@ -421,12 +426,27 @@ def main():
     }
 
     for ip in targets:
-        ports = scan_ports(ip, mode)
+        ports = scan_ports(ip, scan_mode)
         print_ports(ip, ports)
+
+        # Phase 3: default credential check
+        cred_findings = []
+        if check_creds and ports:
+            print(f"    [{ip}] checking default credentials...")
+            cred_findings = check_default_creds(ip, ports)
+            print_cred_results(ip, cred_findings)
+        elif ports:
+            # always check creds on dangerous services even without vuln+creds mode
+            dangerous = [p for p in ports if p["service"] in ("telnet", "ftp") or p["port"] in (23, 21)]
+            if dangerous:
+                print(f"    [{ip}] checking telnet/ftp for default passwords...")
+                cred_findings = check_default_creds(ip, dangerous)
+                print_cred_results(ip, cred_findings)
 
         all_results["targets"].append({
             "ip": ip,
             "ports": ports,
+            "credentials": cred_findings,
         })
 
     # save if requested
@@ -438,8 +458,12 @@ def main():
         len(v) for t in all_results["targets"]
         for p in t["ports"] for v in [p["vulns"]] if v
     )
+    cred_count = sum(len(t["credentials"]) for t in all_results["targets"])
 
-    print(f"[*] Scan complete: {open_count} open port(s), {vuln_count} vuln(s) found")
+    print(f"[*] Scan complete:")
+    print(f"    {open_count} open port(s)")
+    print(f"    {vuln_count} vulnerability(-ies)")
+    print(f"    {cred_count} credential issue(s)")
     print(f"[*] Done.")
 
 

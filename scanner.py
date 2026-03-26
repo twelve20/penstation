@@ -10,31 +10,47 @@ import time
 from datetime import datetime
 
 
-def get_local_ip():
-    """Get the local IP address and subnet."""
+def get_interfaces():
+    """Get all active network interfaces with their IPs."""
+    interfaces = []
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
+        result = subprocess.run(
+            ["ip", "-4", "-o", "addr", "show"],
+            capture_output=True, text=True, timeout=5
+        )
+        for line in result.stdout.splitlines():
+            # e.g.: 2: eth0    inet 192.168.1.49/24 brd ...
+            match = re.search(r"\d+:\s+(\S+)\s+inet\s+(\d+\.\d+\.\d+\.\d+)/(\d+)", line)
+            if match:
+                iface = match.group(1)
+                ip = match.group(2)
+                prefix = int(match.group(3))
+                if iface == "lo":
+                    continue
+                interfaces.append({"name": iface, "ip": ip, "prefix": prefix})
     except Exception:
-        return None
+        pass
+    return interfaces
 
 
-def get_subnet(ip):
-    """Derive /24 subnet from IP (e.g. 192.168.1.0/24)."""
+def get_subnet(ip, prefix=24):
+    """Derive subnet from IP."""
     parts = ip.split(".")
-    return f"{parts[0]}.{parts[1]}.{parts[2]}.0/24"
+    if prefix <= 24:
+        return f"{parts[0]}.{parts[1]}.{parts[2]}.0/{prefix}"
+    return f"{ip}/{prefix}"
 
 
-def scan_arp(subnet):
+def scan_arp(interface=None):
     """ARP scan using arp-scan (fast, requires root)."""
     devices = []
     try:
+        cmd = ["arp-scan", "--localnet", "--retry=3", "--timeout=1000"]
+        if interface:
+            cmd += ["-I", interface]
+
         result = subprocess.run(
-            ["arp-scan", "--localnet", "--retry=2"],
-            capture_output=True, text=True, timeout=30
+            cmd, capture_output=True, text=True, timeout=30
         )
         for line in result.stdout.splitlines():
             match = re.match(
@@ -43,7 +59,7 @@ def scan_arp(subnet):
             if match:
                 devices.append({
                     "ip": match.group(1),
-                    "mac": match.group(2),
+                    "mac": match.group(2).lower(),
                     "vendor": match.group(3).strip(),
                 })
     except FileNotFoundError:
@@ -58,7 +74,7 @@ def scan_nmap_ping(subnet):
     devices = []
     try:
         result = subprocess.run(
-            ["nmap", "-sn", subnet],
+            ["nmap", "-sn", "-T4", "--min-parallelism=10", subnet],
             capture_output=True, text=True, timeout=60
         )
         current_ip = None
@@ -78,9 +94,9 @@ def scan_nmap_ping(subnet):
                 current_mac = None
                 current_vendor = ""
 
-            mac_match = re.search(r"MAC Address: ([0-9A-F:]{17})\s*(.*)", line)
+            mac_match = re.search(r"MAC Address: ([0-9A-Fa-f:]{17})\s*(.*)", line)
             if mac_match:
-                current_mac = mac_match.group(1)
+                current_mac = mac_match.group(1).lower()
                 current_vendor = mac_match.group(2).strip("() ")
 
         if current_ip:
@@ -104,30 +120,39 @@ def resolve_hostname(ip):
         return ""
 
 
-def print_devices(devices):
+def merge_devices(all_devices):
+    """Merge device lists by MAC, keeping all unique entries."""
+    seen = {}
+    for d in all_devices:
+        key = d["mac"]
+        if key not in seen or seen[key]["vendor"] == "":
+            seen[key] = d
+    return list(seen.values())
+
+
+def print_devices(devices, local_ip=None):
     """Pretty-print discovered devices."""
     if not devices:
         print("\n[!] No devices found.")
         return
 
-    # resolve hostnames
     for d in devices:
         d["hostname"] = resolve_hostname(d["ip"])
 
-    # sort by IP
     devices.sort(key=lambda d: tuple(int(p) for p in d["ip"].split(".")))
 
-    print(f"\n{'='*70}")
+    print(f"\n{'='*74}")
     print(f" Found {len(devices)} device(s) on the local network")
-    print(f"{'='*70}")
+    print(f"{'='*74}")
     print(f" {'IP Address':<18}{'MAC Address':<20}{'Vendor/Hostname'}")
-    print(f" {'-'*16:<18}{'-'*17:<20}{'-'*30}")
+    print(f" {'-'*16:<18}{'-'*17:<20}{'-'*33}")
 
     for d in devices:
         name = d["hostname"] or d["vendor"] or "Unknown"
-        print(f" {d['ip']:<18}{d['mac']:<20}{name}")
+        marker = " <-- you" if d["ip"] == local_ip else ""
+        print(f" {d['ip']:<18}{d['mac']:<20}{name}{marker}")
 
-    print(f"{'='*70}\n")
+    print(f"{'='*74}\n")
 
 
 def save_results(devices, filename="scan_results.json"):
@@ -146,40 +171,61 @@ def main():
     print("\n[*] PENSTATION — Simple LAN Scanner")
     print(f"[*] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-    local_ip = get_local_ip()
-    if not local_ip:
-        print("[!] Could not determine local IP. Check network connection.")
+    interfaces = get_interfaces()
+    if not interfaces:
+        print("[!] No active network interfaces found.")
         sys.exit(1)
 
-    subnet = get_subnet(local_ip)
-    print(f"[*] Local IP: {local_ip}")
-    print(f"[*] Scanning subnet: {subnet}")
+    print(f"[*] Active interfaces:")
+    for iface in interfaces:
+        print(f"    - {iface['name']}: {iface['ip']}/{iface['prefix']}")
 
-    # try arp-scan first (faster), fall back to nmap
-    print("[*] Running ARP scan...")
-    devices = scan_arp(subnet)
+    local_ip = interfaces[0]["ip"]
+    all_devices = []
 
-    if not devices:
-        print("[*] ARP scan returned no results, trying nmap ping scan...")
-        devices = scan_nmap_ping(subnet)
+    # scan through each interface with arp-scan
+    for iface in interfaces:
+        subnet = get_subnet(iface["ip"], iface["prefix"])
+        print(f"[*] ARP scanning on {iface['name']} ({subnet})...")
+        devices = scan_arp(interface=iface["name"])
+        print(f"    found {len(devices)} device(s)")
+        all_devices.extend(devices)
 
-    print_devices(devices)
+    # if arp-scan found nothing, fallback to nmap on first interface
+    if not all_devices:
+        subnet = get_subnet(interfaces[0]["ip"], interfaces[0]["prefix"])
+        print(f"[*] ARP scan empty, trying nmap ping scan on {subnet}...")
+        all_devices = scan_nmap_ping(subnet)
 
-    if devices and ("--save" in sys.argv or "-s" in sys.argv):
-        save_results(devices)
+    # deduplicate
+    all_devices = merge_devices(all_devices)
+
+    print_devices(all_devices, local_ip)
+
+    if all_devices and ("--save" in sys.argv or "-s" in sys.argv):
+        save_results(all_devices)
 
     if "--loop" in sys.argv:
         try:
             interval = 30
             for i, arg in enumerate(sys.argv):
                 if arg == "--loop" and i + 1 < len(sys.argv):
-                    interval = int(sys.argv[i + 1])
+                    try:
+                        interval = int(sys.argv[i + 1])
+                    except ValueError:
+                        pass
             print(f"[*] Continuous mode: rescanning every {interval}s (Ctrl+C to stop)\n")
             while True:
                 time.sleep(interval)
                 print(f"\n[*] Rescanning... {datetime.now().strftime('%H:%M:%S')}")
-                devices = scan_arp(subnet) or scan_nmap_ping(subnet)
-                print_devices(devices)
+                rescan = []
+                for iface in interfaces:
+                    rescan.extend(scan_arp(interface=iface["name"]))
+                if not rescan:
+                    subnet = get_subnet(interfaces[0]["ip"], interfaces[0]["prefix"])
+                    rescan = scan_nmap_ping(subnet)
+                rescan = merge_devices(rescan)
+                print_devices(rescan, local_ip)
         except KeyboardInterrupt:
             print("\n[*] Stopped.")
 

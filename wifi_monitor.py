@@ -184,6 +184,10 @@ def run_airodump(mon_iface, duration=20, output_prefix="/tmp/penstation_wifi"):
     for f in glob.glob(f"{output_prefix}*"):
         os.remove(f)
 
+    # make sure interface is UP before scanning
+    subprocess.run(["ip", "link", "set", mon_iface, "up"],
+                   capture_output=True, timeout=5)
+
     print(f"[*] Scanning Wi-Fi on {mon_iface} for {duration} seconds...")
 
     # don't use --band flag — ath9k_htc adapters are 2.4GHz only
@@ -198,14 +202,26 @@ def run_airodump(mon_iface, duration=20, output_prefix="/tmp/penstation_wifi"):
         stderr=err_file,
     )
 
-    time.sleep(duration)
+    # check if airodump-ng died immediately
+    time.sleep(2)
+    if proc.poll() is not None:
+        err_file.close()
+        print(f"[!] airodump-ng exited immediately (code {proc.returncode})")
+        try:
+            with open(err_path, "r") as ef:
+                print(f"[!] stderr: {ef.read().strip()[:300]}")
+        except Exception:
+            pass
+        return None
+
+    # wait remaining time
+    time.sleep(max(0, duration - 2))
 
     # airodump-ng needs SIGINT to flush and close CSV properly
     proc.send_signal(signal.SIGINT)
     try:
         proc.wait(timeout=5)
     except subprocess.TimeoutExpired:
-        # try SIGTERM before KILL
         proc.terminate()
         try:
             proc.wait(timeout=3)
@@ -214,13 +230,18 @@ def run_airodump(mon_iface, duration=20, output_prefix="/tmp/penstation_wifi"):
 
     err_file.close()
 
-    # show errors if any
+    # always show stderr for diagnostics
     try:
-        with open(err_path, "r") as f:
-            errors = f.read().strip()
-        if errors and ("failed" in errors.lower() or "error" in errors.lower()
-                       or "ioctl" in errors.lower()):
-            print(f"[!] airodump-ng errors: {errors[:200]}")
+        with open(err_path, "r") as ef:
+            errors = ef.read().strip()
+        if errors:
+            # filter out ncurses garbage, show meaningful lines
+            lines = errors.splitlines()
+            useful = [l for l in lines if l.strip()
+                      and not l.startswith("\x1b")
+                      and "CH" not in l[:10]]
+            if useful:
+                print(f"[*] airodump-ng output: {useful[0][:150]}")
         os.remove(err_path)
     except Exception:
         pass
@@ -228,25 +249,24 @@ def run_airodump(mon_iface, duration=20, output_prefix="/tmp/penstation_wifi"):
     # find the CSV file
     csv_files = glob.glob(f"{output_prefix}*.csv")
     if csv_files:
-        # check if CSV has actual content
         csv_path = csv_files[0]
         try:
-            with open(csv_path, "r") as f:
-                content = f.read()
-            if len(content.strip()) < 50:
-                print(f"[!] CSV file nearly empty ({len(content)} bytes)")
-                print("[!] Monitor mode may not be working — try:")
-                print("    sudo iw dev")
-                print("    sudo iwconfig")
+            with open(csv_path, "r") as cf:
+                content = cf.read()
+            size = len(content.strip())
+            print(f"[*] CSV file: {csv_path} ({size} bytes)")
+            if size < 50:
+                print(f"[!] CSV nearly empty — airodump-ng captured nothing")
+                print(f"[!] Debug: run manually:")
+                print(f"    sudo airodump-ng {mon_iface}")
+                print(f"    sudo iw dev {mon_iface} info")
         except Exception:
             pass
         return csv_path
 
     print("[!] No CSV output from airodump-ng")
-    print("[!] Possible causes:")
-    print("    - Interface not actually in monitor mode")
-    print("    - Driver doesn't support monitor mode capture")
-    print("    - Try: sudo airodump-ng " + mon_iface)
+    print("[!] Debug: run manually:")
+    print(f"    sudo airodump-ng {mon_iface}")
     return None
 
 
@@ -396,13 +416,17 @@ def scan_wifi(duration=20):
         print(f"[+] Verified: {mon_iface} is in Monitor mode")
     else:
         print(f"[!] WARNING: {mon_iface} may not be in monitor mode")
-        # show iwconfig output for debugging
-        try:
-            result = subprocess.run(["iwconfig", mon_iface],
-                                    capture_output=True, text=True, timeout=5)
-            print(f"    iwconfig: {result.stdout.strip()[:150]}")
-        except Exception:
-            pass
+
+    # show interface details for diagnostics
+    try:
+        result = subprocess.run(["iw", "dev", mon_iface, "info"],
+                                capture_output=True, text=True, timeout=5)
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if any(k in line for k in ["type", "channel", "txpower", "addr"]):
+                print(f"    {line}")
+    except Exception:
+        pass
 
     # run scan
     csv_path = run_airodump(mon_iface, duration)

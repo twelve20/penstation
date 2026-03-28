@@ -82,6 +82,16 @@ def get_monitor_interfaces():
     return interfaces
 
 
+def _verify_monitor_mode(iface):
+    """Check if interface is actually in monitor mode via iwconfig."""
+    try:
+        result = subprocess.run(["iwconfig", iface],
+                                capture_output=True, text=True, timeout=5)
+        return "Mode:Monitor" in result.stdout
+    except Exception:
+        return False
+
+
 def enable_monitor_mode(iface):
     """Enable monitor mode on interface. Returns monitor interface name."""
     print(f"[*] Enabling monitor mode on {iface}...")
@@ -103,21 +113,42 @@ def enable_monitor_mode(iface):
     if match:
         mon_iface = match.group(1)
 
-    # verify it exists
+    # verify via iw dev (check for type monitor)
     mon_interfaces = get_monitor_interfaces()
     if mon_interfaces:
         mon_iface = mon_interfaces[0]
         print(f"[+] Monitor mode: {mon_iface}")
         return mon_iface
 
+    # on newer Kali, airmon-ng keeps the same interface name in monitor mode
+    # check if the original interface is now in monitor mode
+    if _verify_monitor_mode(iface):
+        print(f"[+] Monitor mode: {iface} (name unchanged)")
+        return iface
+
     # try alternate naming
     for name in [f"{iface}mon", "wlan1mon", "wlan0mon"]:
         check = subprocess.run(["ip", "link", "show", name],
                                capture_output=True, timeout=5)
         if check.returncode == 0:
-            mon_iface = name
-            print(f"[+] Monitor mode: {mon_iface}")
-            return mon_iface
+            if _verify_monitor_mode(name):
+                print(f"[+] Monitor mode: {name}")
+                return name
+
+    # last resort: try iw to set monitor mode manually
+    print(f"[!] airmon-ng didn't activate monitor mode, trying iw...")
+    try:
+        subprocess.run(["ip", "link", "set", iface, "down"],
+                       capture_output=True, timeout=5)
+        subprocess.run(["iw", iface, "set", "type", "monitor"],
+                       capture_output=True, timeout=5)
+        subprocess.run(["ip", "link", "set", iface, "up"],
+                       capture_output=True, timeout=5)
+        if _verify_monitor_mode(iface):
+            print(f"[+] Monitor mode: {iface} (via iw)")
+            return iface
+    except Exception:
+        pass
 
     print(f"[!] Could not verify monitor interface, trying {mon_iface}")
     return mon_iface
@@ -128,6 +159,18 @@ def disable_monitor_mode(mon_iface):
     print(f"[*] Disabling monitor mode on {mon_iface}...")
     subprocess.run(["airmon-ng", "stop", mon_iface],
                    capture_output=True, timeout=10)
+
+    # if airmon-ng didn't switch back, use iw
+    if _verify_monitor_mode(mon_iface):
+        try:
+            subprocess.run(["ip", "link", "set", mon_iface, "down"],
+                           capture_output=True, timeout=5)
+            subprocess.run(["iw", mon_iface, "set", "type", "managed"],
+                           capture_output=True, timeout=5)
+            subprocess.run(["ip", "link", "set", mon_iface, "up"],
+                           capture_output=True, timeout=5)
+        except Exception:
+            pass
 
     # restart NetworkManager
     subprocess.run(["systemctl", "start", "NetworkManager"],
@@ -141,13 +184,18 @@ def run_airodump(mon_iface, duration=20, output_prefix="/tmp/penstation_wifi"):
     for f in glob.glob(f"{output_prefix}*"):
         os.remove(f)
 
-    print(f"[*] Scanning Wi-Fi for {duration} seconds...")
+    print(f"[*] Scanning Wi-Fi on {mon_iface} for {duration} seconds...")
+
+    # don't use --band flag — ath9k_htc adapters are 2.4GHz only
+    # and --band abg can cause silent failure on single-band cards
+    err_path = f"{output_prefix}_stderr.log"
+    err_file = open(err_path, "w")
 
     proc = subprocess.Popen(
         ["airodump-ng", "--write", output_prefix, "--output-format", "csv",
-         "--band", "abg", mon_iface],
+         mon_iface],
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stderr=err_file,
     )
 
     time.sleep(duration)
@@ -157,14 +205,48 @@ def run_airodump(mon_iface, duration=20, output_prefix="/tmp/penstation_wifi"):
     try:
         proc.wait(timeout=5)
     except subprocess.TimeoutExpired:
-        proc.kill()
+        # try SIGTERM before KILL
+        proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+    err_file.close()
+
+    # show errors if any
+    try:
+        with open(err_path, "r") as f:
+            errors = f.read().strip()
+        if errors and ("failed" in errors.lower() or "error" in errors.lower()
+                       or "ioctl" in errors.lower()):
+            print(f"[!] airodump-ng errors: {errors[:200]}")
+        os.remove(err_path)
+    except Exception:
+        pass
 
     # find the CSV file
     csv_files = glob.glob(f"{output_prefix}*.csv")
     if csv_files:
-        return csv_files[0]
+        # check if CSV has actual content
+        csv_path = csv_files[0]
+        try:
+            with open(csv_path, "r") as f:
+                content = f.read()
+            if len(content.strip()) < 50:
+                print(f"[!] CSV file nearly empty ({len(content)} bytes)")
+                print("[!] Monitor mode may not be working — try:")
+                print("    sudo iw dev")
+                print("    sudo iwconfig")
+        except Exception:
+            pass
+        return csv_path
 
     print("[!] No CSV output from airodump-ng")
+    print("[!] Possible causes:")
+    print("    - Interface not actually in monitor mode")
+    print("    - Driver doesn't support monitor mode capture")
+    print("    - Try: sudo airodump-ng " + mon_iface)
     return None
 
 
@@ -308,6 +390,19 @@ def scan_wifi(duration=20):
             return None
 
         mon_iface = enable_monitor_mode(iface)
+
+    # verify monitor mode is actually active before scanning
+    if _verify_monitor_mode(mon_iface):
+        print(f"[+] Verified: {mon_iface} is in Monitor mode")
+    else:
+        print(f"[!] WARNING: {mon_iface} may not be in monitor mode")
+        # show iwconfig output for debugging
+        try:
+            result = subprocess.run(["iwconfig", mon_iface],
+                                    capture_output=True, text=True, timeout=5)
+            print(f"    iwconfig: {result.stdout.strip()[:150]}")
+        except Exception:
+            pass
 
     # run scan
     csv_path = run_airodump(mon_iface, duration)

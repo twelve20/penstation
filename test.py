@@ -537,8 +537,8 @@ DE:AD:BE:EF:00:01, 2026-03-26 12:00:00, 2026-03-26 12:01:00, -55, 100, AA:BB:CC:
 CA:FE:BA:BE:00:02, 2026-03-26 12:00:00, 2026-03-26 12:01:00, -65, 50, 11:22:33:44:55:66, OpenWifi
 """
     tmp = tempfile.mktemp(suffix=".csv")
-    with open(tmp, "w") as f:
-        f.write(sample_csv)
+    with open(tmp, "w") as wf:
+        wf.write(sample_csv)
 
     aps, clients = parse_airodump_csv(tmp)
     os.remove(tmp)
@@ -573,8 +573,8 @@ CA:FE:BA:BE:00:02, 2026-03-26 12:00:00, 2026-03-26 12:01:00, -65, 50, 11:22:33:4
 
     # пустой CSV
     empty_tmp = tempfile.mktemp(suffix=".csv")
-    with open(empty_tmp, "w") as f:
-        f.write("")
+    with open(empty_tmp, "w") as wf:
+        wf.write("")
     aps_e, clients_e = parse_airodump_csv(empty_tmp)
     os.remove(empty_tmp)
     check("Пустой CSV → 0 AP, 0 клиентов",

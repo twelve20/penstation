@@ -5,7 +5,6 @@ import json
 import os
 import time
 from datetime import datetime
-from scanner import scan_arp, get_interfaces, merge_devices
 
 
 KNOWN_DEVICES_FILE = "known_devices.json"
@@ -38,6 +37,7 @@ def save_known_devices(known, path=KNOWN_DEVICES_FILE):
 
 def scan_current_devices():
     """Scan all interfaces and return merged device list."""
+    from scanner import scan_arp, get_interfaces, merge_devices
     interfaces = get_interfaces()
     all_devices = []
     for iface in interfaces:

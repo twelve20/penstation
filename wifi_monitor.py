@@ -432,6 +432,17 @@ def scan_wifi(duration=20):
     csv_path = run_airodump(mon_iface, duration)
     aps, clients = parse_airodump_csv(csv_path)
 
+    # if nothing found, dump raw CSV for debugging
+    if not aps and not clients and csv_path and os.path.exists(csv_path):
+        try:
+            with open(csv_path, "r", encoding="utf-8", errors="ignore") as cf:
+                raw = cf.read()
+            print(f"[DEBUG] Raw CSV content ({len(raw)} bytes):")
+            for line in raw.splitlines()[:15]:
+                print(f"  | {repr(line)}")
+        except Exception:
+            pass
+
     # disable monitor mode (unless it was already active)
     if not mon_interfaces:
         disable_monitor_mode(mon_iface)

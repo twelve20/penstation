@@ -54,13 +54,13 @@ print(" PENSTATION self-test")
 print("="*60)
 
 # ── 1. Python version ──
-print("\n[1/9] Python")
+print("\n[1/12] Python")
 v = sys.version_info
 check(f"Python {v.major}.{v.minor}.{v.micro}", v.major == 3 and v.minor >= 6,
       "Need Python 3.6+" if v.major != 3 or v.minor < 6 else "")
 
 # ── 2. Required system tools ──
-print("\n[2/9] System tools")
+print("\n[2/12] System tools")
 
 tools = {
     "nmap": ["nmap", "--version"],
@@ -86,13 +86,13 @@ for name, cmd in optional_tools.items():
         warn(f"{name} not installed (optional)", f"Install: sudo apt install {name}")
 
 # ── 3. Root privileges ──
-print("\n[3/9] Privileges")
+print("\n[3/12] Privileges")
 is_root = os.geteuid() == 0
 check("Running as root", is_root,
       "Run with sudo for ARP scanning" if not is_root else "")
 
 # ── 4. Network interfaces ──
-print("\n[4/9] Network")
+print("\n[4/12] Network")
 
 try:
     from scanner import get_interfaces, get_subnet
@@ -116,7 +116,7 @@ except Exception as e:
     check("Network reachable", False, str(e))
 
 # ── 5. Module imports ──
-print("\n[5/9] Modules")
+print("\n[5/12] Modules")
 
 modules_to_test = [
     ("scanner", "get_interfaces"),
@@ -141,6 +141,17 @@ modules_to_test = [
     ("fingerprint", "detect_os_nmap"),
     ("fingerprint", "guess_os_from_banners"),
     ("fingerprint", "guess_os_from_ports"),
+    ("traceroute", "run_traceroute"),
+    ("traceroute", "parse_traceroute_output"),
+    ("traceroute", "resolve_target"),
+    ("watchdog", "load_known_devices"),
+    ("watchdog", "save_known_devices"),
+    ("watchdog", "find_new_devices"),
+    ("watchdog", "scan_current_devices"),
+    ("watchdog", "run_watchdog"),
+    ("wifi_monitor", "scan_wifi"),
+    ("wifi_monitor", "find_wifi_interface"),
+    ("wifi_monitor", "parse_airodump_csv"),
 ]
 
 for mod_name, func_name in modules_to_test:
@@ -154,7 +165,7 @@ for mod_name, func_name in modules_to_test:
         check(f"{mod_name}.{func_name}", False, "Function not found")
 
 # ── 6. ARP scan test ──
-print("\n[6/9] ARP scan (live test)")
+print("\n[6/12] ARP scan (live test)")
 
 if is_root and interfaces:
     try:
@@ -176,7 +187,7 @@ else:
     warn("ARP scan skipped", "Need root + active interface")
 
 # ── 7. Nmap port scan test (scan localhost) ──
-print("\n[7/9] Nmap port scan (localhost test)")
+print("\n[7/12] Nmap port scan (localhost test)")
 
 if is_root:
     try:
@@ -240,7 +251,7 @@ except Exception as e:
     check("Default creds database", False, str(e))
 
 # fingerprint module tests
-print("\n[8/9] Device fingerprinting")
+print("\n[8/12] Device fingerprinting")
 try:
     from fingerprint import fingerprint_device, classify_by_mac, classify_by_ports
 
@@ -290,7 +301,7 @@ except Exception as e:
     check("Fingerprint module", False, str(e))
 
 # OS detection tests (banner-based, no network needed)
-print("\n[9/9] OS detection")
+print("\n[9/12] OS detection")
 try:
     from fingerprint import guess_os_from_banners, guess_os_from_ports, detect_os
 
@@ -329,6 +340,124 @@ try:
 
 except Exception as e:
     check("OS detection", False, str(e))
+
+# ── 10. Traceroute ──
+print("\n[10/12] Traceroute")
+
+# check traceroute binary
+try:
+    r = subprocess.run(["traceroute", "--version"], capture_output=True, text=True, timeout=5)
+    ver = r.stdout.splitlines()[0] if r.stdout else r.stderr.splitlines()[0] if r.stderr else "?"
+    check("traceroute installed", True, ver.strip()[:60])
+except FileNotFoundError:
+    warn("traceroute not installed", "Install: sudo apt install traceroute")
+
+# test parse_traceroute_output with sample data
+try:
+    from traceroute import parse_traceroute_output, resolve_target
+
+    sample = """traceroute to 8.8.8.8 (8.8.8.8), 30 hops max
+ 1  gateway (192.168.1.1)  1.234 ms  1.456 ms  1.789 ms
+ 2  10.0.0.1 (10.0.0.1)  12.345 ms  11.234 ms  13.456 ms
+ 3  * * *
+ 4  dns.google (8.8.8.8)  20.123 ms  19.456 ms  21.789 ms"""
+
+    hops = parse_traceroute_output(sample)
+    check(f"Parse traceroute: {len(hops)} hops", len(hops) == 4)
+    check(f"Hop 1 IP: {hops[0]['ip']}", hops[0]["ip"] == "192.168.1.1")
+    check(f"Hop 3 timeout: {hops[2]['timeout']}", hops[2]["timeout"] is True)
+    check(f"Hop 1 RTTs: {len(hops[0]['rtts'])}", len(hops[0]["rtts"]) == 3)
+
+    # test resolve_target
+    ip, host = resolve_target("8.8.8.8")
+    check(f"Resolve 8.8.8.8 → {ip}", ip == "8.8.8.8")
+
+except Exception as e:
+    check("Traceroute module", False, str(e))
+
+# ── 11. Watchdog ──
+print("\n[11/12] Network watchdog")
+
+try:
+    from watchdog import load_known_devices, save_known_devices, find_new_devices
+    import tempfile
+
+    # test save/load round-trip
+    test_path = tempfile.mktemp(suffix=".json")
+    test_known = {
+        "aa:bb:cc:dd:ee:ff": {
+            "mac": "aa:bb:cc:dd:ee:ff", "ip": "192.168.1.100",
+            "vendor": "TestVendor", "label": "TestDevice",
+            "first_seen": "2026-01-01", "approved": True,
+        }
+    }
+    save_known_devices(test_known, test_path)
+    loaded = load_known_devices(test_path)
+    check(f"Save/load known devices", "aa:bb:cc:dd:ee:ff" in loaded)
+    os.remove(test_path)
+
+    # test find_new_devices
+    current = [
+        {"mac": "aa:bb:cc:dd:ee:ff", "ip": "192.168.1.100", "vendor": "Old"},
+        {"mac": "11:22:33:44:55:66", "ip": "192.168.1.200", "vendor": "New"},
+    ]
+    new = find_new_devices(current, test_known)
+    check(f"Find new devices: {len(new)} new", len(new) == 1 and new[0]["mac"] == "11:22:33:44:55:66")
+
+    # test empty file handling
+    empty = load_known_devices("/tmp/nonexistent_penstation_test.json")
+    check("Load nonexistent file → empty dict", empty == {})
+
+except Exception as e:
+    check("Watchdog module", False, str(e))
+
+# ── 12. Wi-Fi monitor ──
+print("\n[12/12] Wi-Fi monitor")
+
+# check aircrack-ng
+try:
+    subprocess.run(["airmon-ng", "--help"], capture_output=True, text=True, timeout=5)
+    check("aircrack-ng installed", True)
+except FileNotFoundError:
+    warn("aircrack-ng not installed", "Install: sudo apt install aircrack-ng")
+
+# test CSV parsing with sample data
+try:
+    from wifi_monitor import parse_airodump_csv
+    import tempfile
+
+    sample_csv = """BSSID, First time seen, Last time seen, channel, Speed, Privacy, Cipher, Authentication, Power, # beacons, # IV, LAN IP, ID-length, ESSID, Key
+AA:BB:CC:DD:EE:FF, 2026-03-26 12:00:00, 2026-03-26 12:01:00, 6, 54, WPA2, CCMP, PSK, -45, 100, 50, 0.0.0.0, 10, TestNetwork,
+11:22:33:44:55:66, 2026-03-26 12:00:00, 2026-03-26 12:01:00, 1, 54, OPN, , , -70, 50, 10, 0.0.0.0, 8, OpenWifi,
+
+Station MAC, First time seen, Last time seen, Power, # packets, BSSID, Probed ESSIDs
+DE:AD:BE:EF:00:01, 2026-03-26 12:00:00, 2026-03-26 12:01:00, -55, 100, AA:BB:CC:DD:EE:FF, TestNetwork
+"""
+    tmp = tempfile.mktemp(suffix=".csv")
+    with open(tmp, "w") as f:
+        f.write(sample_csv)
+
+    aps, clients = parse_airodump_csv(tmp)
+    os.remove(tmp)
+
+    check(f"Parse airodump CSV: {len(aps)} AP(s)", len(aps) == 2)
+    check(f"AP ESSID: {aps[0]['essid']}", aps[0]["essid"] in ("TestNetwork", "OpenWifi"))
+    check(f"Parse clients: {len(clients)} client(s)", len(clients) == 1)
+    check(f"Client MAC: {clients[0]['mac']}", clients[0]["mac"] == "DE:AD:BE:EF:00:01")
+
+except Exception as e:
+    check("Wi-Fi monitor module", False, str(e))
+
+# check for Wi-Fi interfaces
+try:
+    from wifi_monitor import find_wifi_interface
+    wifi_iface = find_wifi_interface()
+    if wifi_iface:
+        check(f"Wi-Fi adapter found: {wifi_iface}", True)
+    else:
+        warn("No external Wi-Fi adapter found", "Plug in TP-Link TL-WN722N for Wi-Fi monitoring")
+except Exception as e:
+    warn("Wi-Fi interface check", str(e))
 
 
 # ──────────────────────────────────────────────────────────────

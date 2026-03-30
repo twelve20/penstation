@@ -16,6 +16,7 @@ from fingerprint import fingerprint_device, detect_os
 from traceroute import interactive_traceroute
 from watchdog import run_watchdog, manage_known_devices
 from wifi_monitor import interactive_wifi_scan
+from deauth import interactive_deauth
 
 print_lock = Lock()
 
@@ -563,6 +564,7 @@ def main():
         print(f"  3 = Network watchdog (detect new devices)")
         print(f"  4 = Traceroute (trace route to host)")
         print(f"  5 = Manage known devices (watchdog whitelist)")
+        print(f"  6 = Deauth attack (kick devices off Wi-Fi)")
         print(f"  q = quit")
         print(f"{'='*50}")
 
@@ -587,6 +589,8 @@ def main():
             interactive_traceroute()
         elif choice == "5":
             manage_known_devices()
+        elif choice == "6":
+            interactive_deauth()
         else:
             print("[!] Invalid option")
 

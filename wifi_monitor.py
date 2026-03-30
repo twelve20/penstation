@@ -9,41 +9,88 @@ import signal
 import time
 
 
+def _get_driver(iface):
+    """Get driver name for a network interface."""
+    try:
+        driver_path = f"/sys/class/net/{iface}/device/driver"
+        if os.path.exists(driver_path):
+            return os.path.basename(os.readlink(driver_path))
+    except Exception:
+        pass
+    # fallback: check via ethtool or modalias
+    try:
+        p = f"/sys/class/net/{iface}/device/modalias"
+        if os.path.exists(p):
+            with open(p) as f:
+                return f.read().strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _is_usb(iface):
+    """Check if interface is a USB device."""
+    try:
+        path = f"/sys/class/net/{iface}"
+        real = os.path.realpath(path)
+        return "/usb" in real
+    except Exception:
+        return False
+
+
 def find_wifi_interface():
-    """Find external USB Wi-Fi adapter (not the onboard wlan0)."""
-    interfaces = []
+    """Find best Wi-Fi adapter for monitor mode (prefer USB external adapters)."""
     try:
         result = subprocess.run(["iw", "dev"], capture_output=True, text=True, timeout=5)
-        current_iface = None
-        for line in result.stdout.splitlines():
-            iface_match = re.search(r"Interface\s+(\S+)", line)
-            if iface_match:
-                current_iface = iface_match.group(1)
-                interfaces.append(current_iface)
     except FileNotFoundError:
         print("[!] iw not found. Install: sudo apt install iw")
         return None
 
-    # prefer external adapter (not wlan0 which is onboard)
-    for iface in interfaces:
-        if iface != "wlan0" and not iface.endswith("mon"):
-            # check if it supports monitor mode
-            try:
-                result = subprocess.run(
-                    ["iw", "phy", f"phy{_get_phy(iface)}", "info"],
-                    capture_output=True, text=True, timeout=5
-                )
-                if "monitor" in result.stdout:
-                    return iface
-            except Exception:
-                return iface
+    # collect all non-monitor interfaces
+    interfaces = []
+    current_iface = None
+    current_type = None
+    for line in result.stdout.splitlines():
+        iface_match = re.search(r"Interface\s+(\S+)", line)
+        if iface_match:
+            if current_iface and current_type != "monitor":
+                interfaces.append(current_iface)
+            current_iface = iface_match.group(1)
+            current_type = None
+        type_match = re.search(r"type\s+(\S+)", line)
+        if type_match:
+            current_type = type_match.group(1)
+    if current_iface and current_type != "monitor":
+        interfaces.append(current_iface)
 
-    # fallback: return any non-mon interface
-    for iface in interfaces:
-        if not iface.endswith("mon"):
-            return iface
+    if not interfaces:
+        return None
 
-    return None
+    # score each interface: USB=2pts, supports monitor=1pt, not brcmfmac=1pt
+    def score(iface):
+        s = 0
+        if _is_usb(iface):
+            s += 2
+        driver = _get_driver(iface)
+        if "brcm" not in driver and "brcmfmac" not in driver:
+            s += 1
+        try:
+            r = subprocess.run(
+                ["iw", "phy", f"phy{_get_phy(iface)}", "info"],
+                capture_output=True, text=True, timeout=5
+            )
+            if "monitor" in r.stdout:
+                s += 1
+        except Exception:
+            pass
+        return s
+
+    interfaces.sort(key=score, reverse=True)
+    best = interfaces[0]
+    driver = _get_driver(best)
+    usb = "USB" if _is_usb(best) else "built-in"
+    print(f"[*] Selected adapter: {best} ({usb}, driver: {driver or '?'})")
+    return best
 
 
 def _get_phy(iface):

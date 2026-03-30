@@ -188,16 +188,20 @@ def run_airodump(mon_iface, duration=20, output_prefix="/tmp/penstation_wifi"):
     subprocess.run(["ip", "link", "set", mon_iface, "up"],
                    capture_output=True, timeout=5)
 
+    # reset to channel 1 to ensure channel hopping starts clean
+    subprocess.run(["iw", "dev", mon_iface, "set", "channel", "1"],
+                   capture_output=True, timeout=5)
+
     print(f"[*] Scanning Wi-Fi on {mon_iface} for {duration} seconds...")
 
-    # don't use --band flag — ath9k_htc adapters are 2.4GHz only
-    # and --band abg can cause silent failure on single-band cards
     err_path = f"{output_prefix}_stderr.log"
     err_file = open(err_path, "w")
 
+    # --band bg = 2.4GHz channels only (1-14), forces channel hopping
+    # --berlin 20 = keep APs in list for 20 seconds
     proc = subprocess.Popen(
         ["airodump-ng", "--write", output_prefix, "--output-format", "csv",
-         mon_iface],
+         "--band", "bg", "--berlin", "20", mon_iface],
         stdout=subprocess.DEVNULL,
         stderr=err_file,
     )

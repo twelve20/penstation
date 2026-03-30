@@ -102,75 +102,46 @@ def deauth_menu(aps, clients, mon_iface):
     print(f" {'-'*2:<4}{'-'*26:<28}{'-'*17:<20}{'-'*3:<5}{'-'*10:<12}{'-'*8}")
     for i, ap in enumerate(aps, 1):
         essid = ap["essid"][:26] if ap["essid"] else "<hidden>"
+        # show client count if any
+        ap_client_count = len([c for c in clients if c["bssid"] == ap["bssid"]])
+        clients_str = f"  [{ap_client_count} clients]" if ap_client_count else ""
         print(f" {i:<4}{essid:<28}{ap['bssid']:<20}{ap['channel']:<5}"
-              f"{ap['encryption']:<12}{ap['power']} dBm")
+              f"{ap['encryption']:<12}{ap['power']} dBm{clients_str}")
     print(f" {'='*70}")
+    print(" Enter number to deauth all clients, or q to cancel:")
+    print(" (if clients visible — append client number, e.g. '2c1' = network 2, client 1)")
 
-    print("\n[?] Enter network number (or 'q' to cancel):")
     choice = input("    > ").strip()
     if choice.lower() == "q":
         return
-    try:
-        ap = aps[int(choice) - 1]
-    except (ValueError, IndexError):
-        print("[!] Invalid selection")
-        return
+
+    # parse "2c1" style (network + client)
+    client_mac = None
+    m = re.match(r"(\d+)c(\d+)", choice)
+    if m:
+        net_num, cli_num = int(m.group(1)), int(m.group(2))
+        try:
+            ap = aps[net_num - 1]
+        except IndexError:
+            print("[!] Invalid network number")
+            return
+        ap_clients = [c for c in clients if c["bssid"] == ap["bssid"]]
+        try:
+            client_mac = ap_clients[cli_num - 1]["mac"]
+        except IndexError:
+            print("[!] Invalid client number, using broadcast")
+    else:
+        try:
+            ap = aps[int(choice) - 1]
+        except (ValueError, IndexError):
+            print("[!] Invalid selection")
+            return
 
     bssid = ap["bssid"]
     essid = ap["essid"] or "<hidden>"
-    print(f"\n[*] Target: {essid} ({bssid})")
-
-    # show clients connected to this AP
-    ap_clients = [c for c in clients if c["bssid"] == bssid]
-
-    print(f"\n{'─'*50}")
-    print(f" Deauth mode:")
-    print(f"  1 = Broadcast — kick ALL clients from {essid}")
-    if ap_clients:
-        print(f"  2 = Target specific client ({len(ap_clients)} connected)")
-    print(f"{'─'*50}")
-    print("[?] Choose mode:")
-    mode = input("    > ").strip()
-
-    client_mac = None
-    if mode == "2" and ap_clients:
-        print(f"\n Connected clients:")
-        for i, c in enumerate(ap_clients, 1):
-            print(f"  {i}. {c['mac']}  signal: {c['power']} dBm"
-                  + (f"  probed: {c['probed']}" if c.get("probed") else ""))
-        print("[?] Client number (or enter MAC manually):")
-        sel = input("    > ").strip()
-        if re.match(r"[0-9A-Fa-f:]{17}", sel):
-            client_mac = sel
-        else:
-            try:
-                client_mac = ap_clients[int(sel) - 1]["mac"]
-            except (ValueError, IndexError):
-                print("[!] Invalid, using broadcast")
-
-    # packet count
-    print("\n[?] Packet count (default 10, 0 = continuous until Ctrl+C):")
-    cnt = input("    > ").strip()
-    try:
-        count = int(cnt) if cnt else 10
-    except ValueError:
-        count = 10
-
-    continuous = (count == 0)
-
-    # confirm
-    target_str = client_mac if client_mac else "ALL clients (broadcast)"
-    print(f"\n[!] About to deauth:")
-    print(f"    Network : {essid} ({bssid})")
-    print(f"    Target  : {target_str}")
-    print(f"    Packets : {'continuous' if continuous else count}")
-    print(f"    Interface: {mon_iface}")
-    print(f"\n[?] Confirm (y/n):")
-    if input("    > ").strip().lower() != "y":
-        print("[*] Cancelled")
-        return
-
-    send_deauth(mon_iface, bssid, client_mac, count, continuous,
+    target_str = client_mac if client_mac else "all clients"
+    print(f"\n[!] Deauth {essid} ({bssid}) → {target_str}  [Ctrl+C to stop]")
+    send_deauth(mon_iface, bssid, client_mac, count=0, continuous=True,
                 channel=ap.get("channel"))
 
 
@@ -194,11 +165,6 @@ def interactive_deauth():
             return
 
         print(f"[*] Found adapter: {iface}")
-        print("[?] Enable monitor mode? This will kill Wi-Fi connections. (y/n)")
-        if input("    > ").strip().lower() != "y":
-            print("[*] Cancelled")
-            return
-
         mon_iface = enable_monitor_mode(iface)
         need_disable = True
 
@@ -206,18 +172,10 @@ def interactive_deauth():
         print(f"[!] {mon_iface} is not in monitor mode")
         return
 
-    # scan for networks
-    print("\n[?] Scan duration before deauth (seconds, default 15):")
-    dur = input("    > ").strip()
-    try:
-        duration = int(dur) if dur else 15
-    except ValueError:
-        duration = 15
-
-    print(f"\n[*] Scanning for {duration}s to find targets...")
+    print(f"\n[*] Scanning for 15s to find targets...")
 
     from wifi_monitor import run_airodump, parse_airodump_csv, print_wifi_results
-    csv_path = run_airodump(mon_iface, duration)
+    csv_path = run_airodump(mon_iface, 15)
     aps, clients = parse_airodump_csv(csv_path)
 
     if not aps:

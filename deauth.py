@@ -65,13 +65,15 @@ def send_deauth(mon_iface, bssid, client_mac=None, count=10, continuous=False, c
             line = line.strip()
             if not line:
                 continue
-            # count sent frames
-            m = re.search(r"(\d+)\s+DeAuth", line)
-            if m:
-                frames_sent = int(m.group(1))
+            # aireplay-ng prints one line per sent frame
+            if "Sending DeAuth" in line or "Sending DeAuthentication" in line:
+                frames_sent += 1
                 print(f"\r[*] Deauth frames sent: {frames_sent}", end="", flush=True)
+            elif "Waiting for beacon" in line:
+                print(f"    {line}")
+            elif "more effective" in line or "connected wireless" in line:
+                pass  # suppress hint noise
             else:
-                # show all other output for debugging
                 print(f"    {line}")
         proc.wait()
     except KeyboardInterrupt:
@@ -81,7 +83,7 @@ def send_deauth(mon_iface, bssid, client_mac=None, count=10, continuous=False, c
         except Exception:
             proc.kill()
 
-    print(f"\n[+] Done. Total deauth frames sent: {frames_sent}")
+    print(f"\n[+] Done. Sent {frames_sent} deauth frames to {bssid}")
     return frames_sent
 
 
